@@ -1,0 +1,29 @@
+name: Build ArabicOffice IPA
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Theos and iOS 9.3 SDK
+        uses: beerpiss/theos-action@v1
+
+      - name: Compile and Package IPA (armv7)
+        run: |
+          THEOS=${{ github.workspace }}/theos make stage
+          mkdir -p build/Payload
+          cp -r .theos/_/Applications/ArabicOffice.app build/Payload/
+          cd build && zip -r ../ArabicOffice-iOS9-armv7.ipa Payload
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ArabicOffice-iOS9-armv7
+          path: ArabicOffice-iOS9-armv7.ipa
