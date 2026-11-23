@@ -15,7 +15,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm uuid-dev libssl-dev libplist-dev zlib1g-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
+          sudo apt-get install -y clang llvm uuid-dev libssl-dev libplist-dev zlib1g-dev libblocksruntime-dev libdispatch-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
 
       - name: Build ldid and cctools (armv7)
         run: |
@@ -25,7 +25,7 @@ jobs:
 
           git clone --depth=1 https://github.com/tpoechtrager/cctools-port.git /tmp/cctools
           cd /tmp/cctools/cctools
-          ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
+          CC=clang CXX=clang++ ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
           make -j$(nproc)
           sudo make install
 
@@ -33,17 +33,18 @@ jobs:
         run: |
           git clone --depth=1 --recursive https://github.com/theos/theos.git $HOME/theos
           mkdir -p $HOME/theos/toolchain/linux/iphone/bin
-          ln -s $(which clang) $HOME/theos/toolchain/linux/iphone/bin/clang
-          ln -s $(which clang++) $HOME/theos/toolchain/linux/iphone/bin/clang++
-          ln -s /usr/local/bin/arm-apple-darwin11-ld $HOME/theos/toolchain/linux/iphone/bin/ld64
-          ln -s /usr/local/bin/arm-apple-darwin11-ld $HOME/theos/toolchain/linux/iphone/bin/ld
-          ln -s /usr/local/bin/arm-apple-darwin11-strip $HOME/theos/toolchain/linux/iphone/bin/strip
-          ln -s /usr/local/bin/arm-apple-darwin11-ar $HOME/theos/toolchain/linux/iphone/bin/ar
-          ln -s /usr/local/bin/arm-apple-darwin11-ranlib $HOME/theos/toolchain/linux/iphone/bin/ranlib
-          ln -s /usr/local/bin/arm-apple-darwin11-lipo $HOME/theos/toolchain/linux/iphone/bin/lipo
-          ln -s /usr/local/bin/arm-apple-darwin11-install_name_tool $HOME/theos/toolchain/linux/iphone/bin/install_name_tool
-          ln -s /usr/local/bin/arm-apple-darwin11-codesign_allocate $HOME/theos/toolchain/linux/iphone/bin/codesign_allocate
-          ln -s $(which ldid) $HOME/theos/toolchain/linux/iphone/bin/ldid
+          ln -sf $(which clang) $HOME/theos/toolchain/linux/iphone/bin/clang
+          ln -sf $(which clang++) $HOME/theos/toolchain/linux/iphone/bin/clang++
+          ln -sf /usr/local/bin/arm-apple-darwin11-* $HOME/theos/toolchain/linux/iphone/bin/
+          ln -sf /usr/local/bin/arm-apple-darwin11-ld $HOME/theos/toolchain/linux/iphone/bin/ld64
+          ln -sf /usr/local/bin/arm-apple-darwin11-ld $HOME/theos/toolchain/linux/iphone/bin/ld
+          ln -sf /usr/local/bin/arm-apple-darwin11-strip $HOME/theos/toolchain/linux/iphone/bin/strip
+          ln -sf /usr/local/bin/arm-apple-darwin11-ar $HOME/theos/toolchain/linux/iphone/bin/ar
+          ln -sf /usr/local/bin/arm-apple-darwin11-ranlib $HOME/theos/toolchain/linux/iphone/bin/ranlib
+          ln -sf /usr/local/bin/arm-apple-darwin11-lipo $HOME/theos/toolchain/linux/iphone/bin/lipo
+          ln -sf /usr/local/bin/arm-apple-darwin11-install_name_tool $HOME/theos/toolchain/linux/iphone/bin/install_name_tool
+          ln -sf /usr/local/bin/arm-apple-darwin11-codesign_allocate $HOME/theos/toolchain/linux/iphone/bin/codesign_allocate
+          ln -sf $(which ldid) $HOME/theos/toolchain/linux/iphone/bin/ldid
 
           git clone --depth=1 https://github.com/theos/sdks.git /tmp/sdks
           cp -r /tmp/sdks/iPhoneOS9.3.sdk $HOME/theos/sdks/
