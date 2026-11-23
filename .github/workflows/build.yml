@@ -25,7 +25,8 @@ jobs:
 
           git clone --depth=1 https://github.com/tpoechtrager/cctools-port.git /tmp/cctools
           cd /tmp/cctools/cctools
-          CC=clang CXX=clang++ CFLAGS="-Wno-error" CXXFLAGS="-Wno-error" ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
+          BLOCK_H_DIR=$(dirname $(find /usr -name "Block.h" 2>/dev/null | head -n 1))
+          CC=clang CXX=clang++ CPPFLAGS="-I${BLOCK_H_DIR}" CFLAGS="-Wno-error -I${BLOCK_H_DIR}" CXXFLAGS="-Wno-error -std=gnu++14 -I${BLOCK_H_DIR}" ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
           make -j$(nproc)
           sudo make install
 
@@ -53,7 +54,7 @@ jobs:
       - name: Compile and Package IPA (armv7)
         run: |
           export THEOS=$HOME/theos
-          make stage FINALPACKAGE=1
+          make stage
           mkdir -p build/Payload
           cp -r .theos/_/Applications/ArabicOffice.app build/Payload/
           cd build && zip -r ../ArabicOffice-iOS9-armv7.ipa Payload
