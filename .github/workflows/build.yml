@@ -12,12 +12,46 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm uuid-dev libssl-dev libplist-dev zlib1g-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
+
+      - name: Build ldid and cctools (armv7)
+        run: |
+          git clone --depth=1 https://github.com/ProcursusTeam/ldid.git /tmp/ldid
+          make -C /tmp/ldid -j$(nproc)
+          sudo make -C /tmp/ldid install
+
+          git clone --depth=1 https://github.com/tpoechtrager/cctools-port.git /tmp/cctools
+          cd /tmp/cctools/cctools
+          ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
+          make -j$(nproc)
+          sudo make install
+
       - name: Setup Theos and iOS 9.3 SDK
-        uses: beerpiss/theos-action@v1
+        run: |
+          git clone --depth=1 --recursive https://github.com/theos/theos.git $HOME/theos
+          mkdir -p $HOME/theos/toolchain/linux/iphone/bin
+          ln -s $(which clang) $HOME/theos/toolchain/linux/iphone/bin/clang
+          ln -s $(which clang++) $HOME/theos/toolchain/linux/iphone/bin/clang++
+          ln -s /usr/local/bin/arm-apple-darwin11-ld $HOME/theos/toolchain/linux/iphone/bin/ld64
+          ln -s /usr/local/bin/arm-apple-darwin11-ld $HOME/theos/toolchain/linux/iphone/bin/ld
+          ln -s /usr/local/bin/arm-apple-darwin11-strip $HOME/theos/toolchain/linux/iphone/bin/strip
+          ln -s /usr/local/bin/arm-apple-darwin11-ar $HOME/theos/toolchain/linux/iphone/bin/ar
+          ln -s /usr/local/bin/arm-apple-darwin11-ranlib $HOME/theos/toolchain/linux/iphone/bin/ranlib
+          ln -s /usr/local/bin/arm-apple-darwin11-lipo $HOME/theos/toolchain/linux/iphone/bin/lipo
+          ln -s /usr/local/bin/arm-apple-darwin11-install_name_tool $HOME/theos/toolchain/linux/iphone/bin/install_name_tool
+          ln -s /usr/local/bin/arm-apple-darwin11-codesign_allocate $HOME/theos/toolchain/linux/iphone/bin/codesign_allocate
+          ln -s $(which ldid) $HOME/theos/toolchain/linux/iphone/bin/ldid
+
+          git clone --depth=1 https://github.com/theos/sdks.git /tmp/sdks
+          cp -r /tmp/sdks/iPhoneOS9.3.sdk $HOME/theos/sdks/
 
       - name: Compile and Package IPA (armv7)
         run: |
-          THEOS=${{ github.workspace }}/theos make stage
+          export THEOS=$HOME/theos
+          make stage FINALPACKAGE=1
           mkdir -p build/Payload
           cp -r .theos/_/Applications/ArabicOffice.app build/Payload/
           cd build && zip -r ../ArabicOffice-iOS9-armv7.ipa Payload
