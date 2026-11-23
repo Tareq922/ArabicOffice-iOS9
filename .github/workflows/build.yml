@@ -15,7 +15,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm uuid-dev libssl-dev libplist-dev zlib1g-dev libblocksruntime-dev libxar-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
+          sudo apt-get install -y clang llvm uuid-dev libssl-dev libplist-dev zlib1g-dev libxar-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
 
       - name: Build ldid and cctools (armv7)
         run: |
@@ -24,9 +24,13 @@ jobs:
           sudo make -C /tmp/ldid install
 
           git clone --depth=1 https://github.com/tpoechtrager/cctools-port.git /tmp/cctools
+          cd /tmp/cctools/cctools/BlocksRuntime
+          clang -c -fPIC runtime.c data.c
+          sudo ar rcs /usr/local/lib/libBlocksRuntime.a runtime.o data.o
+          sudo cp Block.h Block_private.h /usr/local/include/
+
           cd /tmp/cctools/cctools
-          BLOCK_H_DIR=$(dirname $(find /usr -name "Block.h" 2>/dev/null | head -n 1))
-          CC=clang CXX=clang++ CPPFLAGS="-I${BLOCK_H_DIR}" CFLAGS="-Wno-error -I${BLOCK_H_DIR}" CXXFLAGS="-Wno-error -std=gnu++14 -I${BLOCK_H_DIR}" ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
+          CC=clang CXX=clang++ CPPFLAGS="-I/usr/local/include" CFLAGS="-Wno-error -I/usr/local/include" CXXFLAGS="-Wno-error -std=gnu++14 -I/usr/local/include" LDFLAGS="-L/usr/local/lib" LIBS="-lBlocksRuntime" ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
           make -j$(nproc)
           sudo make install
 
@@ -36,6 +40,8 @@ jobs:
           mkdir -p $HOME/theos/toolchain/linux/iphone/bin
           ln -sf $(which clang) $HOME/theos/toolchain/linux/iphone/bin/clang
           ln -sf $(which clang++) $HOME/theos/toolchain/linux/iphone/bin/clang++
+          ln -sf $(which clang) $HOME/theos/toolchain/linux/iphone/bin/arm-apple-darwin11-clang
+          ln -sf $(which clang++) $HOME/theos/toolchain/linux/iphone/bin/arm-apple-darwin11-clang++
           ln -sf /usr/local/bin/arm-apple-darwin11-* $HOME/theos/toolchain/linux/iphone/bin/
           ln -sf /usr/local/bin/arm-apple-darwin11-ld $HOME/theos/toolchain/linux/iphone/bin/ld64
           ln -sf /usr/local/bin/arm-apple-darwin11-ld $HOME/theos/toolchain/linux/iphone/bin/ld
@@ -50,6 +56,12 @@ jobs:
 
           git clone --depth=1 https://github.com/theos/sdks.git /tmp/sdks
           cp -r /tmp/sdks/iPhoneOS9.3.sdk $HOME/theos/sdks/
+
+          echo "void __dummy_rt(void) {}" > /tmp/dummy.c
+          clang -target armv7-apple-ios9.0 -isysroot $HOME/theos/sdks/iPhoneOS9.3.sdk -c /tmp/dummy.c -o /tmp/dummy.o
+          CLANG_RES_DIR=$(clang -print-resource-dir)
+          sudo mkdir -p "$CLANG_RES_DIR/lib/darwin"
+          sudo arm-apple-darwin11-ar rcs "$CLANG_RES_DIR/lib/darwin/libclang_rt.ios.a" /tmp/dummy.o
 
       - name: Compile and Package IPA (armv7)
         run: |
