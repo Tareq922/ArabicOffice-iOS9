@@ -15,7 +15,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm uuid-dev libssl-dev libplist-dev zlib1g-dev libblocksruntime-dev libdispatch-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
+          sudo apt-get install -y clang llvm uuid-dev libssl-dev libplist-dev zlib1g-dev libblocksruntime-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
 
       - name: Build ldid and cctools (armv7)
         run: |
@@ -25,7 +25,7 @@ jobs:
 
           git clone --depth=1 https://github.com/tpoechtrager/cctools-port.git /tmp/cctools
           cd /tmp/cctools/cctools
-          CC=clang CXX=clang++ ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
+          CC=clang CXX=clang++ CFLAGS="-Wno-error" CXXFLAGS="-Wno-error" ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
           make -j$(nproc)
           sudo make install
 
