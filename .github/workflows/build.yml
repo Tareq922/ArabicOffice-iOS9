@@ -15,7 +15,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm uuid-dev libssl-dev libplist-dev zlib1g-dev libblocksruntime-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
+          sudo apt-get install -y clang llvm uuid-dev libssl-dev libplist-dev zlib1g-dev libblocksruntime-dev libxar-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
 
       - name: Build ldid and cctools (armv7)
         run: |
@@ -38,6 +38,7 @@ jobs:
           ln -sf /usr/local/bin/arm-apple-darwin11-* $HOME/theos/toolchain/linux/iphone/bin/
           ln -sf /usr/local/bin/arm-apple-darwin11-ld $HOME/theos/toolchain/linux/iphone/bin/ld64
           ln -sf /usr/local/bin/arm-apple-darwin11-ld $HOME/theos/toolchain/linux/iphone/bin/ld
+          ln -sf /usr/local/bin/arm-apple-darwin11-as $HOME/theos/toolchain/linux/iphone/bin/as
           ln -sf /usr/local/bin/arm-apple-darwin11-strip $HOME/theos/toolchain/linux/iphone/bin/strip
           ln -sf /usr/local/bin/arm-apple-darwin11-ar $HOME/theos/toolchain/linux/iphone/bin/ar
           ln -sf /usr/local/bin/arm-apple-darwin11-ranlib $HOME/theos/toolchain/linux/iphone/bin/ranlib
