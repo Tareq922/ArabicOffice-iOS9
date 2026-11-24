@@ -29,10 +29,46 @@ jobs:
           BIN_DIR="$HOME/theos/toolchain/linux/iphone/bin"
           mkdir -p "$BIN_DIR"
 
-          ln -sf $(which clang) "$BIN_DIR/clang"
-          ln -sf $(which clang++) "$BIN_DIR/clang++"
-          ln -sf $(which clang) "$BIN_DIR/arm-apple-darwin11-clang"
-          ln -sf $(which clang++) "$BIN_DIR/arm-apple-darwin11-clang++"
+          cat << 'EOF' > "$BIN_DIR/clang"
+          #!/bin/bash
+          ARGS=()
+          SKIP_NEXT=0
+          for arg in "$@"; do
+            if [ $SKIP_NEXT -eq 1 ]; then
+              SKIP_NEXT=0
+              continue
+            fi
+            if [ "$arg" = "-arch" ]; then
+              SKIP_NEXT=1
+              continue
+            fi
+            ARGS+=("$arg")
+          done
+          exec /usr/bin/clang -target armv7-apple-ios9.0 "${ARGS[@]}"
+          EOF
+          chmod +x "$BIN_DIR/clang"
+          cp "$BIN_DIR/clang" "$BIN_DIR/arm-apple-darwin11-clang"
+
+          cat << 'EOF' > "$BIN_DIR/clang++"
+          #!/bin/bash
+          ARGS=()
+          SKIP_NEXT=0
+          for arg in "$@"; do
+            if [ $SKIP_NEXT -eq 1 ]; then
+              SKIP_NEXT=0
+              continue
+            fi
+            if [ "$arg" = "-arch" ]; then
+              SKIP_NEXT=1
+              continue
+            fi
+            ARGS+=("$arg")
+          done
+          exec /usr/bin/clang++ -target armv7-apple-ios9.0 "${ARGS[@]}"
+          EOF
+          chmod +x "$BIN_DIR/clang++"
+          cp "$BIN_DIR/clang++" "$BIN_DIR/arm-apple-darwin11-clang++"
+
           ln -sf $(which llvm-strip) "$BIN_DIR/strip"
           ln -sf $(which llvm-strip) "$BIN_DIR/arm-apple-darwin11-strip"
           ln -sf $(which llvm-ar) "$BIN_DIR/ar"
@@ -70,8 +106,8 @@ jobs:
           cp -r /tmp/sdks/iPhoneOS9.3.sdk $HOME/theos/sdks/
 
           echo "void __dummy_rt(void) {}" > /tmp/dummy.c
-          clang -target armv7-apple-ios9.0 -isysroot $HOME/theos/sdks/iPhoneOS9.3.sdk -c /tmp/dummy.c -o /tmp/dummy.o
-          CLANG_RES_DIR=$(clang -print-resource-dir)
+          /usr/bin/clang -target armv7-apple-ios9.0 -isysroot $HOME/theos/sdks/iPhoneOS9.3.sdk -c /tmp/dummy.c -o /tmp/dummy.o
+          CLANG_RES_DIR=$(/usr/bin/clang -print-resource-dir)
           sudo mkdir -p "$CLANG_RES_DIR/lib/darwin"
           sudo llvm-ar rcs "$CLANG_RES_DIR/lib/darwin/libclang_rt.ios.a" /tmp/dummy.o
 
