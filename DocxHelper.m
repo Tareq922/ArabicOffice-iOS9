@@ -57,10 +57,17 @@ static void zero_mem(void *ptr, size_t len) {
 @property (nonatomic, assign) BOOL isItalic;
 @property (nonatomic, assign) BOOL isUnderline;
 @property (nonatomic, assign) CGFloat fontSize;
+@property (nonatomic, copy) NSString *requestedFontFamily;
+@property (nonatomic, strong) UIColor *textColor;
 @property (nonatomic, assign) NSTextAlignment alignment;
 @property (nonatomic, assign) BOOL isRTL;
 @property (nonatomic, assign) BOOL hasAppendedFirstParagraph;
 @property (nonatomic, assign) CGSize currentDrawingSize;
+@property (nonatomic, assign) BOOL inTable;
+@property (nonatomic, assign) BOOL inTableRow;
+@property (nonatomic, assign) BOOL inTableCell;
+@property (nonatomic, assign) BOOL isFirstCellInRow;
+@property (nonatomic, assign) BOOL isFirstParagraphInCell;
 @end
 
 @implementation DocxXMLParserDelegate
@@ -72,6 +79,7 @@ static void zero_mem(void *ptr, size_t len) {
         _currentText = [[NSMutableString alloc] init];
         _fontCache = [NSMutableDictionary dictionary];
         _fontSize = 18.0;
+        _textColor = [UIColor blackColor];
         _alignment = NSTextAlignmentRight;
         _isRTL = YES;
         _currentDrawingSize = CGSizeZero;
@@ -98,15 +106,39 @@ static void zero_mem(void *ptr, size_t len) {
     return img;
 }
 
+- (UIColor *)colorFromHexString:(NSString *)hex {
+    if (!hex || hex.length != 6 || [hex isEqualToString:@"auto"]) return [UIColor blackColor];
+    unsigned int rgb = 0;
+    NSScanner *scanner = [NSScanner scannerWithString:hex];
+    if (![scanner scanHexInt:&rgb]) return [UIColor blackColor];
+    CGFloat r = ((rgb >> 16) & 0xFF) / 255.0;
+    CGFloat g = ((rgb >> 8) & 0xFF) / 255.0;
+    CGFloat b = (rgb & 0xFF) / 255.0;
+    return [UIColor colorWithRed:r green:g blue:b alpha:1.0];
+}
+
 - (UIFont *)currentFont {
-    NSString *fontName = @"ArialMT";
-    if (self.isBold && self.isItalic) {
-        fontName = @"Arial-BoldItalicMT";
-    } else if (self.isBold) {
-        fontName = @"Arial-BoldMT";
-    } else if (self.isItalic) {
-        fontName = @"Arial-ItalicMT";
+    NSString *baseFamily = @"Arial";
+    if (self.requestedFontFamily.length > 0) {
+        NSString *low = self.requestedFontFamily.lowercaseString;
+        if ([low rangeOfString:@"geeza"].location != NSNotFound) baseFamily = @"GeezaPro";
+        else if ([low rangeOfString:@"damascus"].location != NSNotFound) baseFamily = @"Damascus";
+        else if ([low rangeOfString:@"baghdad"].location != NSNotFound) baseFamily = @"Baghdad";
     }
+
+    NSString *fontName = @"ArialMT";
+    if ([baseFamily isEqualToString:@"GeezaPro"]) {
+        fontName = self.isBold ? @"GeezaPro-Bold" : @"GeezaPro";
+    } else if ([baseFamily isEqualToString:@"Damascus"]) {
+        fontName = self.isBold ? @"DamascusBold" : @"Damascus";
+    } else if ([baseFamily isEqualToString:@"Baghdad"]) {
+        fontName = @"Baghdad";
+    } else {
+        if (self.isBold && self.isItalic) fontName = @"Arial-BoldItalicMT";
+        else if (self.isBold) fontName = @"Arial-BoldMT";
+        else if (self.isItalic) fontName = @"Arial-ItalicMT";
+    }
+
     NSString *key = [NSString stringWithFormat:@"%@_%ld", fontName, (long)(self.fontSize * 10.0)];
     UIFont *cached = self.fontCache[key];
     if (cached) return cached;
@@ -127,7 +159,7 @@ static void zero_mem(void *ptr, size_t len) {
     NSMutableDictionary *attrs = [NSMutableDictionary dictionary];
     attrs[NSFontAttributeName] = [self currentFont];
     attrs[NSParagraphStyleAttributeName] = para;
-    attrs[NSForegroundColorAttributeName] = [UIColor blackColor];
+    attrs[NSForegroundColorAttributeName] = self.textColor ?: [UIColor blackColor];
     if (self.isUnderline) {
         attrs[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
     }
@@ -178,19 +210,49 @@ static void zero_mem(void *ptr, size_t len) {
 }
 
 - (void)parser:(NSXMLParser *)parser didStartElement:(NSString *)elementName namespaceURI:(NSString *)namespaceURI qualifiedName:(NSString *)qName attributes:(NSDictionary<NSString *,NSString *> *)attributeDict {
-    if ([elementName isEqualToString:@"w:p"]) {
+    if ([elementName isEqualToString:@"w:tbl"]) {
+        self.inTable = YES;
         if (self.hasAppendedFirstParagraph) {
             NSAttributedString *nl = [[NSAttributedString alloc] initWithString:@"\n" attributes:[self currentAttributes]];
             [self.result appendAttributedString:nl];
         }
         self.hasAppendedFirstParagraph = YES;
-        self.inParagraph = YES;
+    } else if ([elementName isEqualToString:@"w:tr"] && self.inTable) {
+        self.inTableRow = YES;
+        self.isFirstCellInRow = YES;
         self.alignment = NSTextAlignmentRight;
         self.isRTL = YES;
-    } else if ([elementName isEqualToString:@"w:bidi"] && self.inParagraph) {
+    } else if ([elementName isEqualToString:@"w:tc"] && self.inTableRow) {
+        self.inTableCell = YES;
+        self.isFirstParagraphInCell = YES;
+        if (!self.isFirstCellInRow) {
+            NSMutableDictionary *sepAttrs = [[self currentAttributes] mutableCopy];
+            sepAttrs[NSForegroundColorAttributeName] = [UIColor grayColor];
+            NSAttributedString *sep = [[NSAttributedString alloc] initWithString:@"  |  " attributes:sepAttrs];
+            [self.result appendAttributedString:sep];
+        }
+        self.isFirstCellInRow = NO;
+    } else if ([elementName isEqualToString:@"w:p"]) {
+        if (self.inTableCell) {
+            if (!self.isFirstParagraphInCell) {
+                NSAttributedString *sp = [[NSAttributedString alloc] initWithString:@" " attributes:[self currentAttributes]];
+                [self.result appendAttributedString:sp];
+            }
+            self.isFirstParagraphInCell = NO;
+        } else {
+            if (self.hasAppendedFirstParagraph) {
+                NSAttributedString *nl = [[NSAttributedString alloc] initWithString:@"\n" attributes:[self currentAttributes]];
+                [self.result appendAttributedString:nl];
+            }
+            self.hasAppendedFirstParagraph = YES;
+            self.alignment = NSTextAlignmentRight;
+            self.isRTL = YES;
+        }
+        self.inParagraph = YES;
+    } else if ([elementName isEqualToString:@"w:bidi"] && self.inParagraph && !self.inTableCell) {
         NSString *val = attributeDict[@"w:val"];
         self.isRTL = !(val && ([val isEqualToString:@"0"] || [val isEqualToString:@"false"]));
-    } else if ([elementName isEqualToString:@"w:jc"] && self.inParagraph) {
+    } else if ([elementName isEqualToString:@"w:jc"] && self.inParagraph && !self.inTableCell) {
         NSString *val = attributeDict[@"w:val"];
         if ([val isEqualToString:@"left"] || [val isEqualToString:@"start"]) {
             self.alignment = NSTextAlignmentLeft;
@@ -207,6 +269,12 @@ static void zero_mem(void *ptr, size_t len) {
         self.isItalic = NO;
         self.isUnderline = NO;
         self.fontSize = 18.0;
+        self.requestedFontFamily = nil;
+        self.textColor = [UIColor blackColor];
+    } else if ([elementName isEqualToString:@"w:rFonts"] && self.inRun) {
+        self.requestedFontFamily = attributeDict[@"w:cs"] ?: attributeDict[@"w:ascii"] ?: attributeDict[@"w:hAnsi"];
+    } else if ([elementName isEqualToString:@"w:color"] && self.inRun) {
+        self.textColor = [self colorFromHexString:attributeDict[@"w:val"]];
     } else if ([elementName isEqualToString:@"w:b"] && self.inRun) {
         NSString *val = attributeDict[@"w:val"];
         self.isBold = !(val && ([val isEqualToString:@"0"] || [val isEqualToString:@"false"]));
@@ -261,6 +329,16 @@ static void zero_mem(void *ptr, size_t len) {
     } else if ([elementName isEqualToString:@"w:p"]) {
         [self flushRunText];
         self.inParagraph = NO;
+    } else if ([elementName isEqualToString:@"w:tc"]) {
+        [self flushRunText];
+        self.inTableCell = NO;
+    } else if ([elementName isEqualToString:@"w:tr"]) {
+        [self flushRunText];
+        NSAttributedString *nl = [[NSAttributedString alloc] initWithString:@"\n" attributes:[self currentAttributes]];
+        [self.result appendAttributedString:nl];
+        self.inTableRow = NO;
+    } else if ([elementName isEqualToString:@"w:tbl"]) {
+        self.inTable = NO;
     }
 }
 
@@ -406,6 +484,19 @@ static void zero_mem(void *ptr, size_t len) {
     return s;
 }
 
++ (NSString *)hexStringFromColor:(UIColor *)color {
+    if (!color) return nil;
+    CGFloat r = 0, g = 0, b = 0, a = 0;
+    if ([color getRed:&r green:&g blue:&b alpha:&a]) {
+        NSInteger ri = (NSInteger)(r * 255.0 + 0.5);
+        NSInteger gi = (NSInteger)(g * 255.0 + 0.5);
+        NSInteger bi = (NSInteger)(b * 255.0 + 0.5);
+        if (ri == 0 && gi == 0 && bi == 0) return nil;
+        return [NSString stringWithFormat:@"%02lX%02lX%02lX", (long)ri, (long)gi, (long)bi];
+    }
+    return nil;
+}
+
 + (NSData *)deflateRaw:(NSData *)rawData {
     if (rawData.length == 0) return [NSData data];
     z_stream strm;
@@ -511,24 +602,34 @@ static void zero_mem(void *ptr, size_t len) {
 
                 UIFont *font = attrs[NSFontAttributeName];
                 NSNumber *underline = attrs[NSUnderlineStyleAttributeName];
+                UIColor *fgColor = attrs[NSForegroundColorAttributeName];
 
                 BOOL bold = NO;
                 BOOL italic = NO;
                 CGFloat size = 18.0;
+                NSString *exportFont = @"Arial";
                 if (font) {
                     size = font.pointSize;
+                    NSString *fn = font.fontName;
+                    if ([fn rangeOfString:@"Geeza" options:NSCaseInsensitiveSearch].location != NSNotFound) exportFont = @"Geeza Pro";
+                    else if ([fn rangeOfString:@"Damascus" options:NSCaseInsensitiveSearch].location != NSNotFound) exportFont = @"Damascus";
+                    else if ([fn rangeOfString:@"Baghdad" options:NSCaseInsensitiveSearch].location != NSNotFound) exportFont = @"Baghdad";
+
                     UIFontDescriptorSymbolicTraits traits = font.fontDescriptor.symbolicTraits;
-                    bold = (traits & UIFontDescriptorTraitBold) != 0 || ([font.fontName rangeOfString:@"Bold" options:NSCaseInsensitiveSearch].location != NSNotFound);
-                    italic = (traits & UIFontDescriptorTraitItalic) != 0 || ([font.fontName rangeOfString:@"Italic" options:NSCaseInsensitiveSearch].location != NSNotFound);
+                    bold = (traits & UIFontDescriptorTraitBold) != 0 || ([fn rangeOfString:@"Bold" options:NSCaseInsensitiveSearch].location != NSNotFound);
+                    italic = (traits & UIFontDescriptorTraitItalic) != 0 || ([fn rangeOfString:@"Italic" options:NSCaseInsensitiveSearch].location != NSNotFound);
                 }
                 BOOL under = (underline && underline.integerValue != NSUnderlineStyleNone);
                 NSInteger halfPts = (NSInteger)(size * 2.0 + 0.5);
+                NSString *hexColor = [self hexStringFromColor:fgColor];
 
                 [xml appendString:@"    <w:r>\n      <w:rPr>"];
+                [xml appendFormat:@"<w:rFonts w:ascii=\"%@\" w:hAnsi=\"%@\" w:cs=\"%@\"/>", exportFont, exportFont, exportFont];
                 if (isRTL) [xml appendString:@"<w:rtl/>"];
                 if (bold) [xml appendString:@"<w:b/>"];
                 if (italic) [xml appendString:@"<w:i/>"];
                 if (under) [xml appendString:@"<w:u w:val=\"single\"/>"];
+                if (hexColor) [xml appendFormat:@"<w:color w:val=\"%@\"/>", hexColor];
                 [xml appendFormat:@"<w:sz w:val=\"%ld\"/><w:szCs w:val=\"%ld\"/>", (long)halfPts, (long)halfPts];
                 [xml appendString:@"</w:rPr>\n"];
                 [xml appendFormat:@"      <w:t xml:space=\"preserve\">%@</w:t>\n    </w:r>\n", [self escapeXML:sub]];
