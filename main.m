@@ -6,6 +6,8 @@
 @property (nonatomic, strong) NSURL *currentFileURL;
 @property (nonatomic, strong) UIBarButtonItem *saveShareItem;
 @property (nonatomic, strong) UIBarButtonItem *openItem;
+@property (nonatomic, strong) UIView *loadingOverlay;
+@property (nonatomic, strong) UILabel *loadingLabel;
 - (void)openDocumentAtURL:(NSURL *)url;
 @end
 
@@ -28,14 +30,50 @@
     self.textView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.textView.backgroundColor = [UIColor whiteColor];
     self.textView.textContainerInset = UIEdgeInsetsMake(20, 24, 20, 24);
+    self.textView.layoutManager.allowsNonContiguousLayout = YES;
+    self.textView.spellCheckingType = UITextSpellCheckingTypeNo;
+    self.textView.autocorrectionType = UITextAutocorrectionTypeNo;
     self.textView.delegate = self;
 
     [self setupFormattingToolbar];
     [self.view addSubview:self.textView];
+    [self setupLoadingOverlay];
 
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardChanged:) name:UIKeyboardWillChangeFrameNotification object:nil];
 
     [self newDoc];
+}
+
+- (void)setupLoadingOverlay {
+    self.loadingOverlay = [[UIView alloc] initWithFrame:self.view.bounds];
+    self.loadingOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.loadingOverlay.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.35];
+    self.loadingOverlay.hidden = YES;
+
+    UIView *box = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 220, 90)];
+    box.center = CGPointMake(self.loadingOverlay.bounds.size.width / 2.0, self.loadingOverlay.bounds.size.height / 2.0);
+    box.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+    box.backgroundColor = [UIColor whiteColor];
+    box.layer.cornerRadius = 12.0;
+
+    UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
+    spinner.center = CGPointMake(110, 30);
+    [spinner startAnimating];
+    [box addSubview:spinner];
+
+    self.loadingLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 52, 200, 26)];
+    self.loadingLabel.textAlignment = NSTextAlignmentCenter;
+    self.loadingLabel.font = [UIFont systemFontOfSize:15.0];
+    self.loadingLabel.textColor = [UIColor darkGrayColor];
+    [box addSubview:self.loadingLabel];
+
+    [self.loadingOverlay addSubview:box];
+    [self.view addSubview:self.loadingOverlay];
+}
+
+- (void)setLoading:(BOOL)loading message:(NSString *)msg {
+    self.loadingLabel.text = msg ?: @"يرجى الانتظار...";
+    self.loadingOverlay.hidden = !loading;
 }
 
 - (void)setupFormattingToolbar {
@@ -66,12 +104,12 @@
     [picker dismissViewControllerAnimated:YES completion:^{
         if (!picked) return;
 
-        CGFloat maxDim = 1024.0;
+        CGFloat maxDim = 768.0;
         UIImage *finalImg = picked;
         if (picked.size.width > maxDim || picked.size.height > maxDim) {
             CGFloat scale = maxDim / MAX(picked.size.width, picked.size.height);
             CGSize newSize = CGSizeMake((CGFloat)(NSInteger)(picked.size.width * scale + 0.5), (CGFloat)(NSInteger)(picked.size.height * scale + 0.5));
-            UIGraphicsBeginImageContextWithOptions(newSize, NO, 1.0);
+            UIGraphicsBeginImageContextWithOptions(newSize, YES, 1.0);
             [picked drawInRect:CGRectMake(0, 0, newSize.width, newSize.height)];
             UIImage *resized = UIGraphicsGetImageFromCurrentImageContext();
             UIGraphicsEndImageContext();
@@ -98,14 +136,15 @@
         [insertion appendAttributedString:imgStr];
         [insertion appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n" attributes:[self defaultArabicAttributes]]];
 
+        NSTextStorage *storage = self.textView.textStorage;
         NSRange sel = self.textView.selectedRange;
-        if (sel.location == NSNotFound || sel.location > self.textView.attributedText.length) {
-            sel = NSMakeRange(self.textView.attributedText.length, 0);
+        if (sel.location == NSNotFound || sel.location > storage.length) {
+            sel = NSMakeRange(storage.length, 0);
         }
 
-        NSMutableAttributedString *full = [self.textView.attributedText mutableCopy];
-        [full replaceCharactersInRange:sel withAttributedString:insertion];
-        self.textView.attributedText = full;
+        [storage beginEditing];
+        [storage replaceCharactersInRange:sel withAttributedString:insertion];
+        [storage endEditing];
         self.textView.selectedRange = NSMakeRange(sel.location + insertion.length, 0);
     }];
 }
@@ -144,12 +183,14 @@
 }
 
 - (void)applyRTL {
-    NSMutableAttributedString *attr = [self.textView.attributedText mutableCopy];
+    NSTextStorage *storage = self.textView.textStorage;
     NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
     para.alignment = NSTextAlignmentRight;
     para.baseWritingDirection = NSWritingDirectionRightToLeft;
-    [attr addAttribute:NSParagraphStyleAttributeName value:para range:NSMakeRange(0, attr.length)];
-    self.textView.attributedText = attr;
+
+    [storage beginEditing];
+    [storage addAttribute:NSParagraphStyleAttributeName value:para range:NSMakeRange(0, storage.length)];
+    [storage endEditing];
     self.textView.typingAttributes = [self defaultArabicAttributes];
 }
 
@@ -157,8 +198,9 @@
     NSRange range = self.textView.selectedRange;
     if (range.length == 0) return;
 
-    NSMutableAttributedString *attr = [self.textView.attributedText mutableCopy];
-    [attr enumerateAttribute:NSFontAttributeName inRange:range options:0 usingBlock:^(UIFont *font, NSRange subRange, BOOL *stop) {
+    NSTextStorage *storage = self.textView.textStorage;
+    [storage beginEditing];
+    [storage enumerateAttribute:NSFontAttributeName inRange:range options:0 usingBlock:^(UIFont *font, NSRange subRange, BOOL *stop) {
         UIFont *base = font ?: ([UIFont fontWithName:@"ArialMT" size:19.0] ?: [UIFont systemFontOfSize:19.0]);
         CGFloat size = MAX(12.0, MIN(48.0, base.pointSize + delta));
         BOOL isB = ([base.fontName rangeOfString:@"Bold" options:NSCaseInsensitiveSearch].location != NSNotFound);
@@ -172,10 +214,9 @@
         else if (isI) name = @"Arial-ItalicMT";
 
         UIFont *newFont = [UIFont fontWithName:name size:size] ?: (isB ? [UIFont boldSystemFontOfSize:size] : [UIFont systemFontOfSize:size]);
-        [attr addAttribute:NSFontAttributeName value:newFont range:subRange];
+        [storage addAttribute:NSFontAttributeName value:newFont range:subRange];
     }];
-    self.textView.attributedText = attr;
-    self.textView.selectedRange = range;
+    [storage endEditing];
 }
 
 - (void)toggleBold { [self modifySelectedFontWithBold:YES italic:NO sizeDelta:0]; }
@@ -186,12 +227,13 @@
 - (void)toggleUnderline {
     NSRange range = self.textView.selectedRange;
     if (range.length == 0) return;
-    NSMutableAttributedString *attr = [self.textView.attributedText mutableCopy];
-    NSNumber *cur = [attr attribute:NSUnderlineStyleAttributeName atIndex:range.location effectiveRange:NULL];
+    NSTextStorage *storage = self.textView.textStorage;
+    NSNumber *cur = [storage attribute:NSUnderlineStyleAttributeName atIndex:range.location effectiveRange:NULL];
     NSInteger next = (cur && cur.integerValue != NSUnderlineStyleNone) ? NSUnderlineStyleNone : NSUnderlineStyleSingle;
-    [attr addAttribute:NSUnderlineStyleAttributeName value:@(next) range:range];
-    self.textView.attributedText = attr;
-    self.textView.selectedRange = range;
+
+    [storage beginEditing];
+    [storage addAttribute:NSUnderlineStyleAttributeName value:@(next) range:range];
+    [storage endEditing];
 }
 
 - (NSURL *)documentsDirectoryURL {
@@ -232,27 +274,35 @@
         if (name.length == 0) name = @"مستند_عربي";
         NSString *fullName = [NSString stringWithFormat:@"%@.%@", name, ext];
         NSURL *destURL = [[self documentsDirectoryURL] URLByAppendingPathComponent:fullName];
+        NSAttributedString *snapshot = [self.textView.attributedText copy];
+        NSString *plainSnapshot = [self.textView.text copy];
 
-        NSError *err = nil;
-        BOOL ok = NO;
-        if ([ext isEqualToString:@"docx"]) {
-            ok = [DocxHelper writeAttributedString:self.textView.attributedText toDocxURL:destURL error:&err];
-        } else if ([ext isEqualToString:@"rtf"]) {
-            NSData *rtfData = [self.textView.attributedText dataFromRange:NSMakeRange(0, self.textView.attributedText.length) documentAttributes:@{NSDocumentTypeDocumentAttribute: NSRTFTextDocumentType} error:&err];
-            if (rtfData) ok = [rtfData writeToURL:destURL options:NSDataWritingAtomic error:&err];
-        } else {
-            ok = [self.textView.text writeToURL:destURL atomically:YES encoding:NSUTF8StringEncoding error:&err];
-        }
+        [self setLoading:YES message:@"جاري حفظ المستند..."];
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            NSError *err = nil;
+            BOOL ok = NO;
+            if ([ext isEqualToString:@"docx"]) {
+                ok = [DocxHelper writeAttributedString:snapshot toDocxURL:destURL error:&err];
+            } else if ([ext isEqualToString:@"rtf"]) {
+                NSData *rtfData = [snapshot dataFromRange:NSMakeRange(0, snapshot.length) documentAttributes:@{NSDocumentTypeDocumentAttribute: NSRTFTextDocumentType} error:&err];
+                if (rtfData) ok = [rtfData writeToURL:destURL options:NSDataWritingAtomic error:&err];
+            } else {
+                ok = [plainSnapshot writeToURL:destURL atomically:YES encoding:NSUTF8StringEncoding error:&err];
+            }
 
-        if (ok) {
-            self.currentFileURL = destURL;
-            self.title = fullName;
-            UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[destURL] applicationActivities:nil];
-            activity.popoverPresentationController.barButtonItem = self.saveShareItem;
-            [self presentViewController:activity animated:YES completion:nil];
-        } else {
-            [self showMessage:@"خطأ في الحفظ" body:err.localizedDescription ?: @"فشل حفظ الملف"];
-        }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self setLoading:NO message:nil];
+                if (ok) {
+                    self.currentFileURL = destURL;
+                    self.title = fullName;
+                    UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[destURL] applicationActivities:nil];
+                    activity.popoverPresentationController.barButtonItem = self.saveShareItem;
+                    [self presentViewController:activity animated:YES completion:nil];
+                } else {
+                    [self showMessage:@"خطأ في الحفظ" body:err.localizedDescription ?: @"فشل حفظ الملف"];
+                }
+            });
+        });
     }]];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
@@ -281,27 +331,35 @@
 
 - (void)openDocumentAtURL:(NSURL *)url {
     NSString *ext = url.pathExtension.lowercaseString;
-    NSError *err = nil;
-    NSAttributedString *loaded = nil;
+    NSDictionary *defaultAttrs = [self defaultArabicAttributes];
 
-    if ([ext isEqualToString:@"docx"]) {
-        loaded = [DocxHelper attributedStringFromDocxURL:url error:&err];
-    } else if ([ext isEqualToString:@"rtf"]) {
-        loaded = [[NSAttributedString alloc] initWithURL:url options:@{NSDocumentTypeDocumentAttribute: NSRTFTextDocumentType} documentAttributes:nil error:&err];
-    } else {
-        NSString *txt = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:&err];
-        if (txt) {
-            loaded = [[NSAttributedString alloc] initWithString:txt attributes:[self defaultArabicAttributes]];
+    [self setLoading:YES message:@"جاري فتح المستند..."];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSError *err = nil;
+        NSAttributedString *loaded = nil;
+
+        if ([ext isEqualToString:@"docx"]) {
+            loaded = [DocxHelper attributedStringFromDocxURL:url error:&err];
+        } else if ([ext isEqualToString:@"rtf"]) {
+            loaded = [[NSAttributedString alloc] initWithURL:url options:@{NSDocumentTypeDocumentAttribute: NSRTFTextDocumentType} documentAttributes:nil error:&err];
+        } else {
+            NSString *txt = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:&err];
+            if (txt) {
+                loaded = [[NSAttributedString alloc] initWithString:txt attributes:defaultAttrs];
+            }
         }
-    }
 
-    if (loaded) {
-        self.textView.attributedText = loaded;
-        self.currentFileURL = url;
-        self.title = url.lastPathComponent;
-    } else {
-        [self showMessage:@"تعذر فتح الملف" body:err.localizedDescription ?: @"صيغة الملف غير مدعومة"];
-    }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self setLoading:NO message:nil];
+            if (loaded) {
+                self.textView.attributedText = loaded;
+                self.currentFileURL = url;
+                self.title = url.lastPathComponent;
+            } else {
+                [self showMessage:@"تعذر فتح الملف" body:err.localizedDescription ?: @"صيغة الملف غير مدعومة"];
+            }
+        });
+    });
 }
 
 - (void)showMessage:(NSString *)title body:(NSString *)body {
