@@ -17,7 +17,7 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates clang g++ cmake llvm-dev uuid-dev libssl-dev libplist-dev zlib1g-dev libxml2-dev libblocksruntime-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates clang g++ cmake llvm-dev uuid-dev libssl-dev libplist-dev zlib1g-dev libxml2-dev libblocksruntime-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot rsync
 
       - name: Build ldid, xar, libdispatch, and cctools (armv7)
         run: |
