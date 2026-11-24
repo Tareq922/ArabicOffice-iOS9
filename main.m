@@ -6,8 +6,12 @@
 @property (nonatomic, strong) NSURL *currentFileURL;
 @property (nonatomic, strong) UIBarButtonItem *saveShareItem;
 @property (nonatomic, strong) UIBarButtonItem *openItem;
+@property (nonatomic, strong) UIBarButtonItem *fontItem;
+@property (nonatomic, strong) UIBarButtonItem *colorItem;
+@property (nonatomic, strong) UIBarButtonItem *listItem;
 @property (nonatomic, strong) UIView *loadingOverlay;
 @property (nonatomic, strong) UILabel *loadingLabel;
+@property (nonatomic, copy) NSString *activeFontFamily;
 - (void)openDocumentAtURL:(NSURL *)url;
 @end
 
@@ -17,12 +21,15 @@
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor whiteColor];
     self.title = @"مستند_جديد.docx";
+    self.activeFontFamily = @"Arial";
 
     UIBarButtonItem *newItem = [[UIBarButtonItem alloc] initWithTitle:@"جديد" style:UIBarButtonItemStylePlain target:self action:@selector(newDoc)];
     self.openItem = [[UIBarButtonItem alloc] initWithTitle:@"فتح" style:UIBarButtonItemStylePlain target:self action:@selector(openDocList)];
-    self.navigationItem.leftBarButtonItems = @[self.openItem, newItem];
+    UIBarButtonItem *undoItem = [[UIBarButtonItem alloc] initWithTitle:@"تراجع" style:UIBarButtonItemStylePlain target:self action:@selector(undoEdit)];
+    UIBarButtonItem *redoItem = [[UIBarButtonItem alloc] initWithTitle:@"إعادة" style:UIBarButtonItemStylePlain target:self action:@selector(redoEdit)];
+    self.navigationItem.leftBarButtonItems = @[self.openItem, newItem, undoItem, redoItem];
 
-    UIBarButtonItem *rtlItem = [[UIBarButtonItem alloc] initWithTitle:@"ضبط عربي RTL" style:UIBarButtonItemStylePlain target:self action:@selector(applyRTL)];
+    UIBarButtonItem *rtlItem = [[UIBarButtonItem alloc] initWithTitle:@"ضبط RTL" style:UIBarButtonItemStylePlain target:self action:@selector(applyRTL)];
     self.saveShareItem = [[UIBarButtonItem alloc] initWithTitle:@"حفظ ومشاركة" style:UIBarButtonItemStyleDone target:self action:@selector(saveAndShare)];
     self.navigationItem.rightBarButtonItems = @[rtlItem, self.saveShareItem];
 
@@ -78,18 +85,240 @@
 
 - (void)setupFormattingToolbar {
     UIToolbar *toolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
-    UIBarButtonItem *hideKB = [[UIBarButtonItem alloc] initWithTitle:@"إخفاء الكيبورد" style:UIBarButtonItemStylePlain target:self.textView action:@selector(resignFirstResponder)];
-    UIBarButtonItem *insertImg = [[UIBarButtonItem alloc] initWithTitle:@"إدراج صورة" style:UIBarButtonItemStylePlain target:self action:@selector(pickImage)];
+    UIBarButtonItem *hideKB = [[UIBarButtonItem alloc] initWithTitle:@"إخفاء" style:UIBarButtonItemStylePlain target:self.textView action:@selector(resignFirstResponder)];
+    UIBarButtonItem *insertImg = [[UIBarButtonItem alloc] initWithTitle:@"صورة" style:UIBarButtonItemStylePlain target:self action:@selector(pickImage)];
+    self.fontItem = [[UIBarButtonItem alloc] initWithTitle:@"الخط" style:UIBarButtonItemStylePlain target:self action:@selector(chooseFont)];
+    self.colorItem = [[UIBarButtonItem alloc] initWithTitle:@"اللون" style:UIBarButtonItemStylePlain target:self action:@selector(chooseColor)];
+    self.listItem = [[UIBarButtonItem alloc] initWithTitle:@"قائمة" style:UIBarButtonItemStylePlain target:self action:@selector(chooseList)];
+    UIBarButtonItem *alignR = [[UIBarButtonItem alloc] initWithTitle:@"يمين" style:UIBarButtonItemStylePlain target:self action:@selector(alignRight)];
+    UIBarButtonItem *alignC = [[UIBarButtonItem alloc] initWithTitle:@"وسط" style:UIBarButtonItemStylePlain target:self action:@selector(alignCenter)];
+    UIBarButtonItem *alignL = [[UIBarButtonItem alloc] initWithTitle:@"يسار" style:UIBarButtonItemStylePlain target:self action:@selector(alignLeft)];
     UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-    UIBarButtonItem *fontMinus = [[UIBarButtonItem alloc] initWithTitle:@"خط -" style:UIBarButtonItemStylePlain target:self action:@selector(decreaseFont)];
-    UIBarButtonItem *fontPlus = [[UIBarButtonItem alloc] initWithTitle:@"خط +" style:UIBarButtonItemStylePlain target:self action:@selector(increaseFont)];
-    UIBarButtonItem *underline = [[UIBarButtonItem alloc] initWithTitle:@"تسطير U" style:UIBarButtonItemStylePlain target:self action:@selector(toggleUnderline)];
-    UIBarButtonItem *italic = [[UIBarButtonItem alloc] initWithTitle:@"مائل I" style:UIBarButtonItemStylePlain target:self action:@selector(toggleItalic)];
-    UIBarButtonItem *bold = [[UIBarButtonItem alloc] initWithTitle:@"عريض B" style:UIBarButtonItemStyleDone target:self action:@selector(toggleBold)];
+    UIBarButtonItem *fontMinus = [[UIBarButtonItem alloc] initWithTitle:@"خط-" style:UIBarButtonItemStylePlain target:self action:@selector(decreaseFont)];
+    UIBarButtonItem *fontPlus = [[UIBarButtonItem alloc] initWithTitle:@"خط+" style:UIBarButtonItemStylePlain target:self action:@selector(increaseFont)];
+    UIBarButtonItem *underline = [[UIBarButtonItem alloc] initWithTitle:@"U" style:UIBarButtonItemStylePlain target:self action:@selector(toggleUnderline)];
+    UIBarButtonItem *italic = [[UIBarButtonItem alloc] initWithTitle:@"I" style:UIBarButtonItemStylePlain target:self action:@selector(toggleItalic)];
+    UIBarButtonItem *bold = [[UIBarButtonItem alloc] initWithTitle:@"B" style:UIBarButtonItemStyleDone target:self action:@selector(toggleBold)];
 
-    toolbar.items = @[hideKB, insertImg, flex, fontMinus, fontPlus, underline, italic, bold];
+    toolbar.items = @[hideKB, insertImg, self.fontItem, self.colorItem, self.listItem, alignR, alignC, alignL, flex, fontMinus, fontPlus, underline, italic, bold];
     self.textView.inputAccessoryView = toolbar;
 }
+
+- (UIFont *)buildFontWithFamily:(NSString *)family size:(CGFloat)size bold:(BOOL)isB italic:(BOOL)isI {
+    NSString *fam = family ?: self.activeFontFamily ?: @"Arial";
+    NSString *name = @"ArialMT";
+    if ([fam isEqualToString:@"GeezaPro"]) {
+        name = isB ? @"GeezaPro-Bold" : @"GeezaPro";
+    } else if ([fam isEqualToString:@"Damascus"]) {
+        name = isB ? @"DamascusBold" : @"Damascus";
+    } else if ([fam isEqualToString:@"Baghdad"]) {
+        name = @"Baghdad";
+    } else {
+        if (isB && isI) name = @"Arial-BoldItalicMT";
+        else if (isB) name = @"Arial-BoldMT";
+        else if (isI) name = @"Arial-ItalicMT";
+    }
+    UIFont *f = [UIFont fontWithName:name size:size];
+    if (!f) {
+        f = isB ? [UIFont boldSystemFontOfSize:size] : [UIFont systemFontOfSize:size];
+    }
+    return f;
+}
+
+- (void)chooseFont {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"نوع الخط العربي" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    NSDictionary<NSString *, NSString *> *fonts = @{
+        @"Arial (الافتراضي)": @"Arial",
+        @"Geeza Pro (نسخ واضح)": @"GeezaPro",
+        @"Damascus (دمشق)": @"Damascus",
+        @"Baghdad (بغداد)": @"Baghdad"
+    };
+    NSArray *titles = @[@"Arial (الافتراضي)", @"Geeza Pro (نسخ واضح)", @"Damascus (دمشق)", @"Baghdad (بغداد)"];
+    for (NSString *t in titles) {
+        NSString *fam = fonts[t];
+        [sheet addAction:[UIAlertAction actionWithTitle:t style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [self applyFontFamily:fam];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.barButtonItem = self.fontItem;
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)applyFontFamily:(NSString *)family {
+    self.activeFontFamily = family;
+    NSTextStorage *storage = self.textView.textStorage;
+    NSRange range = self.textView.selectedRange;
+
+    if (range.length > 0) {
+        [storage beginEditing];
+        [storage enumerateAttribute:NSFontAttributeName inRange:range options:0 usingBlock:^(UIFont *font, NSRange subRange, BOOL *stop) {
+            UIFont *base = font ?: [self buildFontWithFamily:family size:19.0 bold:NO italic:NO];
+            BOOL isB = ([base.fontName rangeOfString:@"Bold" options:NSCaseInsensitiveSearch].location != NSNotFound);
+            BOOL isI = ([base.fontName rangeOfString:@"Italic" options:NSCaseInsensitiveSearch].location != NSNotFound);
+            UIFont *newFont = [self buildFontWithFamily:family size:base.pointSize bold:isB italic:isI];
+            [storage addAttribute:NSFontAttributeName value:newFont range:subRange];
+        }];
+        [storage endEditing];
+    }
+
+    NSMutableDictionary *typing = [self.textView.typingAttributes mutableCopy] ?: [[self defaultArabicAttributes] mutableCopy];
+    UIFont *curTyping = typing[NSFontAttributeName];
+    CGFloat sz = curTyping ? curTyping.pointSize : 19.0;
+    BOOL isB = curTyping && ([curTyping.fontName rangeOfString:@"Bold" options:NSCaseInsensitiveSearch].location != NSNotFound);
+    BOOL isI = curTyping && ([curTyping.fontName rangeOfString:@"Italic" options:NSCaseInsensitiveSearch].location != NSNotFound);
+    typing[NSFontAttributeName] = [self buildFontWithFamily:family size:sz bold:isB italic:isI];
+    self.textView.typingAttributes = typing;
+}
+
+- (void)chooseColor {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"لون النص" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"أسود" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self applyTextColor:[UIColor blackColor]];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"أزرق داكن" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self applyTextColor:[UIColor colorWithRed:0.05 green:0.28 blue:0.65 alpha:1.0]];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"أحمر" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self applyTextColor:[UIColor colorWithRed:0.75 green:0.10 blue:0.10 alpha:1.0]];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"أخضر" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self applyTextColor:[UIColor colorWithRed:0.08 green:0.48 blue:0.20 alpha:1.0]];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.barButtonItem = self.colorItem;
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)applyTextColor:(UIColor *)color {
+    NSTextStorage *storage = self.textView.textStorage;
+    NSRange range = self.textView.selectedRange;
+    if (range.length > 0) {
+        [storage beginEditing];
+        [storage addAttribute:NSForegroundColorAttributeName value:color range:range];
+        [storage endEditing];
+    }
+    NSMutableDictionary *typing = [self.textView.typingAttributes mutableCopy] ?: [[self defaultArabicAttributes] mutableCopy];
+    typing[NSForegroundColorAttributeName] = color;
+    self.textView.typingAttributes = typing;
+}
+
+- (void)chooseList {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"تنسيق القوائم" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"قائمة نقطية (•)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self formatSelectedLinesAsNumbered:NO removePrefix:NO];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"قائمة رقمية (1. 2. 3.)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self formatSelectedLinesAsNumbered:YES removePrefix:NO];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"إزالة الترقيم/النقاط" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        [self formatSelectedLinesAsNumbered:NO removePrefix:YES];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.barButtonItem = self.listItem;
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)formatSelectedLinesAsNumbered:(BOOL)numbered removePrefix:(BOOL)removeOnly {
+    NSTextStorage *storage = self.textView.textStorage;
+    NSRange sel = self.textView.selectedRange;
+    if (sel.location == NSNotFound || sel.location > storage.length) {
+        sel = NSMakeRange(storage.length, 0);
+    }
+
+    if (storage.length == 0) {
+        if (!removeOnly) {
+            NSString *prefix = numbered ? @"1. " : @"• ";
+            NSAttributedString *ins = [[NSAttributedString alloc] initWithString:prefix attributes:self.textView.typingAttributes ?: [self defaultArabicAttributes]];
+            [storage beginEditing];
+            [storage replaceCharactersInRange:NSMakeRange(0, 0) withAttributedString:ins];
+            [storage endEditing];
+            self.textView.selectedRange = NSMakeRange(prefix.length, 0);
+        }
+        return;
+    }
+
+    NSRange paraRange = [storage.string paragraphRangeForRange:sel];
+    NSString *block = [storage.string substringWithRange:paraRange];
+    NSArray<NSString *> *lines = [block componentsSeparatedByString:@"\n"];
+
+    NSMutableArray<NSString *> *updatedLines = [NSMutableArray arrayWithCapacity:lines.count];
+    NSInteger counter = 1;
+
+    for (NSUInteger i = 0; i < lines.count; i++) {
+        NSString *line = lines[i];
+        if (i == lines.count - 1 && line.length == 0 && lines.count > 1) {
+            [updatedLines addObject:@""];
+            continue;
+        }
+        NSString *clean = line;
+        if ([clean hasPrefix:@"• "]) {
+            clean = [clean substringFromIndex:2];
+        } else {
+            NSRange dotRange = [clean rangeOfString:@". "];
+            if (dotRange.location != NSNotFound && dotRange.location <= 3) {
+                NSString *numPart = [clean substringToIndex:dotRange.location];
+                if (numPart.integerValue > 0) {
+                    clean = [clean substringFromIndex:dotRange.location + 2];
+                }
+            }
+        }
+        if (removeOnly) {
+            [updatedLines addObject:clean];
+        } else {
+            NSString *prefix = numbered ? [NSString stringWithFormat:@"%ld. ", (long)counter++] : @"• ";
+            [updatedLines addObject:[prefix stringByAppendingString:clean]];
+        }
+    }
+
+    NSString *replacement = [updatedLines componentsJoinedByString:@"\n"];
+    NSDictionary *attrs = [storage attributesAtIndex:paraRange.location effectiveRange:NULL];
+    NSAttributedString *repAttr = [[NSAttributedString alloc] initWithString:replacement attributes:attrs];
+
+    [storage beginEditing];
+    [storage replaceCharactersInRange:paraRange withAttributedString:repAttr];
+    [storage endEditing];
+    self.textView.selectedRange = NSMakeRange(paraRange.location, repAttr.length);
+}
+
+- (void)undoEdit {
+    if ([self.textView.undoManager canUndo]) {
+        [self.textView.undoManager undo];
+    }
+}
+
+- (void)redoEdit {
+    if ([self.textView.undoManager canRedo]) {
+        [self.textView.undoManager redo];
+    }
+}
+
+- (void)setParagraphAlignment:(NSTextAlignment)alignment {
+    NSTextStorage *storage = self.textView.textStorage;
+    NSRange sel = self.textView.selectedRange;
+    if (sel.location == NSNotFound || sel.location > storage.length) {
+        sel = NSMakeRange(storage.length, 0);
+    }
+
+    NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
+    para.alignment = alignment;
+    para.baseWritingDirection = (alignment == NSTextAlignmentLeft) ? NSWritingDirectionLeftToRight : NSWritingDirectionRightToLeft;
+
+    if (storage.length > 0) {
+        NSRange paraRange = [storage.string paragraphRangeForRange:sel];
+        [storage beginEditing];
+        [storage addAttribute:NSParagraphStyleAttributeName value:para range:paraRange];
+        [storage endEditing];
+    }
+
+    NSMutableDictionary *typing = [self.textView.typingAttributes mutableCopy] ?: [[self defaultArabicAttributes] mutableCopy];
+    typing[NSParagraphStyleAttributeName] = para;
+    self.textView.typingAttributes = typing;
+}
+
+- (void)alignRight { [self setParagraphAlignment:NSTextAlignmentRight]; }
+- (void)alignCenter { [self setParagraphAlignment:NSTextAlignmentCenter]; }
+- (void)alignLeft { [self setParagraphAlignment:NSTextAlignmentLeft]; }
 
 - (void)pickImage {
     UIImagePickerController *picker = [[UIImagePickerController alloc] init];
@@ -167,7 +396,7 @@
     NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
     para.alignment = NSTextAlignmentRight;
     para.baseWritingDirection = NSWritingDirectionRightToLeft;
-    UIFont *font = [UIFont fontWithName:@"ArialMT" size:19.0] ?: [UIFont systemFontOfSize:19.0];
+    UIFont *font = [self buildFontWithFamily:self.activeFontFamily size:19.0 bold:NO italic:NO];
     return @{
         NSFontAttributeName: font,
         NSParagraphStyleAttributeName: para,
@@ -196,27 +425,37 @@
 
 - (void)modifySelectedFontWithBold:(BOOL)toggleBold italic:(BOOL)toggleItalic sizeDelta:(CGFloat)delta {
     NSRange range = self.textView.selectedRange;
-    if (range.length == 0) return;
+    if (range.length > 0) {
+        NSTextStorage *storage = self.textView.textStorage;
+        [storage beginEditing];
+        [storage enumerateAttribute:NSFontAttributeName inRange:range options:0 usingBlock:^(UIFont *font, NSRange subRange, BOOL *stop) {
+            UIFont *base = font ?: [self buildFontWithFamily:self.activeFontFamily size:19.0 bold:NO italic:NO];
+            CGFloat size = MAX(12.0, MIN(48.0, base.pointSize + delta));
+            BOOL isB = ([base.fontName rangeOfString:@"Bold" options:NSCaseInsensitiveSearch].location != NSNotFound);
+            BOOL isI = ([base.fontName rangeOfString:@"Italic" options:NSCaseInsensitiveSearch].location != NSNotFound);
+            if (toggleBold) isB = !isB;
+            if (toggleItalic) isI = !isI;
 
-    NSTextStorage *storage = self.textView.textStorage;
-    [storage beginEditing];
-    [storage enumerateAttribute:NSFontAttributeName inRange:range options:0 usingBlock:^(UIFont *font, NSRange subRange, BOOL *stop) {
-        UIFont *base = font ?: ([UIFont fontWithName:@"ArialMT" size:19.0] ?: [UIFont systemFontOfSize:19.0]);
-        CGFloat size = MAX(12.0, MIN(48.0, base.pointSize + delta));
-        BOOL isB = ([base.fontName rangeOfString:@"Bold" options:NSCaseInsensitiveSearch].location != NSNotFound);
-        BOOL isI = ([base.fontName rangeOfString:@"Italic" options:NSCaseInsensitiveSearch].location != NSNotFound);
-        if (toggleBold) isB = !isB;
-        if (toggleItalic) isI = !isI;
+            NSString *fam = self.activeFontFamily;
+            if ([base.fontName rangeOfString:@"Geeza" options:NSCaseInsensitiveSearch].location != NSNotFound) fam = @"GeezaPro";
+            else if ([base.fontName rangeOfString:@"Damascus" options:NSCaseInsensitiveSearch].location != NSNotFound) fam = @"Damascus";
+            else if ([base.fontName rangeOfString:@"Baghdad" options:NSCaseInsensitiveSearch].location != NSNotFound) fam = @"Baghdad";
 
-        NSString *name = @"ArialMT";
-        if (isB && isI) name = @"Arial-BoldItalicMT";
-        else if (isB) name = @"Arial-BoldMT";
-        else if (isI) name = @"Arial-ItalicMT";
+            UIFont *newFont = [self buildFontWithFamily:fam size:size bold:isB italic:isI];
+            [storage addAttribute:NSFontAttributeName value:newFont range:subRange];
+        }];
+        [storage endEditing];
+    }
 
-        UIFont *newFont = [UIFont fontWithName:name size:size] ?: (isB ? [UIFont boldSystemFontOfSize:size] : [UIFont systemFontOfSize:size]);
-        [storage addAttribute:NSFontAttributeName value:newFont range:subRange];
-    }];
-    [storage endEditing];
+    NSMutableDictionary *typing = [self.textView.typingAttributes mutableCopy] ?: [[self defaultArabicAttributes] mutableCopy];
+    UIFont *cur = typing[NSFontAttributeName] ?: [self buildFontWithFamily:self.activeFontFamily size:19.0 bold:NO italic:NO];
+    CGFloat size = MAX(12.0, MIN(48.0, cur.pointSize + delta));
+    BOOL isB = ([cur.fontName rangeOfString:@"Bold" options:NSCaseInsensitiveSearch].location != NSNotFound);
+    BOOL isI = ([cur.fontName rangeOfString:@"Italic" options:NSCaseInsensitiveSearch].location != NSNotFound);
+    if (toggleBold) isB = !isB;
+    if (toggleItalic) isI = !isI;
+    typing[NSFontAttributeName] = [self buildFontWithFamily:self.activeFontFamily size:size bold:isB italic:isI];
+    self.textView.typingAttributes = typing;
 }
 
 - (void)toggleBold { [self modifySelectedFontWithBold:YES italic:NO sizeDelta:0]; }
@@ -226,14 +465,20 @@
 
 - (void)toggleUnderline {
     NSRange range = self.textView.selectedRange;
-    if (range.length == 0) return;
-    NSTextStorage *storage = self.textView.textStorage;
-    NSNumber *cur = [storage attribute:NSUnderlineStyleAttributeName atIndex:range.location effectiveRange:NULL];
-    NSInteger next = (cur && cur.integerValue != NSUnderlineStyleNone) ? NSUnderlineStyleNone : NSUnderlineStyleSingle;
+    if (range.length > 0) {
+        NSTextStorage *storage = self.textView.textStorage;
+        NSNumber *cur = [storage attribute:NSUnderlineStyleAttributeName atIndex:range.location effectiveRange:NULL];
+        NSInteger next = (cur && cur.integerValue != NSUnderlineStyleNone) ? NSUnderlineStyleNone : NSUnderlineStyleSingle;
 
-    [storage beginEditing];
-    [storage addAttribute:NSUnderlineStyleAttributeName value:@(next) range:range];
-    [storage endEditing];
+        [storage beginEditing];
+        [storage addAttribute:NSUnderlineStyleAttributeName value:@(next) range:range];
+        [storage endEditing];
+    }
+    NSMutableDictionary *typing = [self.textView.typingAttributes mutableCopy] ?: [[self defaultArabicAttributes] mutableCopy];
+    NSNumber *curT = typing[NSUnderlineStyleAttributeName];
+    NSInteger nextT = (curT && curT.integerValue != NSUnderlineStyleNone) ? NSUnderlineStyleNone : NSUnderlineStyleSingle;
+    typing[NSUnderlineStyleAttributeName] = @(nextT);
+    self.textView.typingAttributes = typing;
 }
 
 - (NSURL *)documentsDirectoryURL {
