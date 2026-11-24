@@ -8,22 +8,30 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    container:
+      image: ubuntu:22.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang lld llvm libssl-dev libplist-dev git make zip unzip perl fakeroot
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates clang g++ llvm-dev uuid-dev libssl-dev libplist-dev zlib1g-dev libblocksruntime-dev libdispatch-dev libxar-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
 
-      - name: Build ldid
+      - name: Build ldid and cctools (armv7)
         run: |
           git clone --depth=1 https://github.com/ProcursusTeam/ldid.git /tmp/ldid
           make -C /tmp/ldid -j$(nproc)
-          sudo make -C /tmp/ldid install
+          make -C /tmp/ldid install
 
-      - name: Setup Theos, LLD Toolchain, and iOS 9.3 SDK
+          git clone --depth=1 https://github.com/tpoechtrager/cctools-port.git /tmp/cctools
+          cd /tmp/cctools/cctools
+          CC=clang CXX=clang++ ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
+          make -j$(nproc)
+          make install
+
+      - name: Setup Theos and iOS 9.3 SDK
         run: |
           git clone --depth=1 --recursive https://github.com/theos/theos.git $HOME/theos
           rm -rf "$HOME/theos/include/_fallback/sys"
@@ -32,7 +40,6 @@ jobs:
 
           cat << 'EOF' > "$BIN_DIR/clang"
           #!/bin/bash
-          BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           ARGS=()
           SKIP_NEXT=0
           IS_COMPILE_ONLY=0
@@ -58,7 +65,7 @@ jobs:
             ARGS+=("$arg")
           done
           if [ $IS_COMPILE_ONLY -eq 0 ]; then
-            ARGS+=("--ld-path=$BIN_DIR/ld")
+            ARGS+=("--ld-path=/usr/local/bin/arm-apple-darwin11-ld")
           fi
           exec /usr/bin/clang "${ARGS[@]}" -fno-modules --target=armv7-apple-ios9.0
           EOF
@@ -67,7 +74,6 @@ jobs:
 
           cat << 'EOF' > "$BIN_DIR/clang++"
           #!/bin/bash
-          BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           ARGS=()
           SKIP_NEXT=0
           IS_COMPILE_ONLY=0
@@ -93,45 +99,24 @@ jobs:
             ARGS+=("$arg")
           done
           if [ $IS_COMPILE_ONLY -eq 0 ]; then
-            ARGS+=("--ld-path=$BIN_DIR/ld")
+            ARGS+=("--ld-path=/usr/local/bin/arm-apple-darwin11-ld")
           fi
           exec /usr/bin/clang++ "${ARGS[@]}" -fno-modules --target=armv7-apple-ios9.0
           EOF
           chmod +x "$BIN_DIR/clang++"
           cp "$BIN_DIR/clang++" "$BIN_DIR/arm-apple-darwin11-clang++"
 
-          ln -sf $(which llvm-strip) "$BIN_DIR/strip"
-          ln -sf $(which llvm-strip) "$BIN_DIR/arm-apple-darwin11-strip"
-          ln -sf $(which llvm-ar) "$BIN_DIR/ar"
-          ln -sf $(which llvm-ar) "$BIN_DIR/arm-apple-darwin11-ar"
-          ln -sf $(which llvm-ranlib) "$BIN_DIR/ranlib"
-          ln -sf $(which llvm-ranlib) "$BIN_DIR/arm-apple-darwin11-ranlib"
-          ln -sf $(which llvm-lipo) "$BIN_DIR/lipo"
-          ln -sf $(which llvm-lipo) "$BIN_DIR/arm-apple-darwin11-lipo"
-          ln -sf $(which llvm-install-name-tool) "$BIN_DIR/install_name_tool"
-          ln -sf $(which llvm-install-name-tool) "$BIN_DIR/arm-apple-darwin11-install_name_tool"
+          ln -sf /usr/local/bin/arm-apple-darwin11-* "$BIN_DIR/"
+          ln -sf /usr/local/bin/arm-apple-darwin11-ld "$BIN_DIR/ld64"
+          ln -sf /usr/local/bin/arm-apple-darwin11-ld "$BIN_DIR/ld"
+          ln -sf /usr/local/bin/arm-apple-darwin11-as "$BIN_DIR/as"
+          ln -sf /usr/local/bin/arm-apple-darwin11-strip "$BIN_DIR/strip"
+          ln -sf /usr/local/bin/arm-apple-darwin11-ar "$BIN_DIR/ar"
+          ln -sf /usr/local/bin/arm-apple-darwin11-ranlib "$BIN_DIR/ranlib"
+          ln -sf /usr/local/bin/arm-apple-darwin11-lipo "$BIN_DIR/lipo"
+          ln -sf /usr/local/bin/arm-apple-darwin11-install_name_tool "$BIN_DIR/install_name_tool"
+          ln -sf /usr/local/bin/arm-apple-darwin11-codesign_allocate "$BIN_DIR/codesign_allocate"
           ln -sf $(which ldid) "$BIN_DIR/ldid"
-
-          cat << 'EOF' > "$BIN_DIR/ld"
-          #!/bin/bash
-          ARGS=()
-          SKIP_NEXT=0
-          for arg in "$@"; do
-            if [ $SKIP_NEXT -eq 1 ]; then
-              SKIP_NEXT=0
-              continue
-            fi
-            if [ "$arg" = "-multiply_defined" ]; then
-              SKIP_NEXT=1
-              continue
-            fi
-            ARGS+=("$arg")
-          done
-          exec ld64.lld "${ARGS[@]}"
-          EOF
-          chmod +x "$BIN_DIR/ld"
-          cp "$BIN_DIR/ld" "$BIN_DIR/ld64"
-          cp "$BIN_DIR/ld" "$BIN_DIR/arm-apple-darwin11-ld"
 
           git clone --depth=1 https://github.com/theos/sdks.git /tmp/sdks
           cp -r /tmp/sdks/iPhoneOS9.3.sdk $HOME/theos/sdks/
@@ -139,20 +124,19 @@ jobs:
           echo "void __dummy_rt(void) {}" > /tmp/dummy.c
           /usr/bin/clang --target=armv7-apple-ios9.0 -isysroot $HOME/theos/sdks/iPhoneOS9.3.sdk -c /tmp/dummy.c -o /tmp/dummy.o
           CLANG_RES_DIR=$(/usr/bin/clang -print-resource-dir)
-          sudo mkdir -p "$CLANG_RES_DIR/lib/darwin"
-          sudo llvm-ar rcs "$CLANG_RES_DIR/lib/darwin/libclang_rt.ios.a" /tmp/dummy.o
-          sudo cp "$CLANG_RES_DIR/lib/darwin/libclang_rt.ios.a" "$CLANG_RES_DIR/lib/darwin/libclang_rt.ios_armv7.a"
+          mkdir -p "$CLANG_RES_DIR/lib/darwin"
+          /usr/local/bin/arm-apple-darwin11-ar rcs "$CLANG_RES_DIR/lib/darwin/libclang_rt.ios.a" /tmp/dummy.o
 
       - name: Compile and Package IPA (armv7)
         run: |
           export THEOS=$HOME/theos
-          export PATH="$HOME/theos/toolchain/linux/iphone/bin:$PATH"
+          export PATH="$HOME/theos/toolchain/linux/iphone/bin:/usr/local/bin:$PATH"
           find . -maxdepth 2 -name "*.m" -exec sed -i 's/@import \([A-Za-z0-9_]*\);/#import <\1\/\1.h>/g' {} +
           make stage DEBUG=0 \
             TARGET_CC="$HOME/theos/toolchain/linux/iphone/bin/clang" \
             TARGET_CXX="$HOME/theos/toolchain/linux/iphone/bin/clang++" \
             TARGET_LD="$HOME/theos/toolchain/linux/iphone/bin/clang++" \
-            TARGET_STRIP="$HOME/theos/toolchain/linux/iphone/bin/strip"
+            TARGET_STRIP="/usr/local/bin/arm-apple-darwin11-strip"
           mkdir -p build/Payload
           cp -r .theos/_/Applications/*.app build/Payload/
           cd build && zip -r ../ArabicOffice-iOS9-armv7.ipa Payload
