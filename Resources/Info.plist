@@ -69,5 +69,7 @@
 			</array>
 		</dict>
 	</array>
+<key>NSPhotoLibraryUsageDescription</key>
+	<string>يحتاج التطبيق إلى الوصول لألبوم الصور لإدراج الصور داخل مستندات الوورد.</string>
 </dict>
 </plist>
