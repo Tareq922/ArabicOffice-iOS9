@@ -26,6 +26,7 @@ jobs:
       - name: Setup Theos, LLD Toolchain, and iOS 9.3 SDK
         run: |
           git clone --depth=1 --recursive https://github.com/theos/theos.git $HOME/theos
+          rm -rf "$HOME/theos/include/_fallback/sys"
           BIN_DIR="$HOME/theos/toolchain/linux/iphone/bin"
           mkdir -p "$BIN_DIR"
 
@@ -40,6 +41,10 @@ jobs:
             fi
             if [ "$arg" = "-arch" ]; then
               SKIP_NEXT=1
+              continue
+            fi
+            if [[ "$arg" == -I*/_fallback ]]; then
+              ARGS+=("-idirafter${arg#-I}")
               continue
             fi
             ARGS+=("$arg")
@@ -60,6 +65,10 @@ jobs:
             fi
             if [ "$arg" = "-arch" ]; then
               SKIP_NEXT=1
+              continue
+            fi
+            if [[ "$arg" == -I*/_fallback ]]; then
+              ARGS+=("-idirafter${arg#-I}")
               continue
             fi
             ARGS+=("$arg")
