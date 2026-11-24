@@ -15,7 +15,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm uuid-dev libssl-dev libplist-dev zlib1g-dev libxar-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
+          sudo apt-get install -y clang llvm llvm-dev uuid-dev libssl-dev libplist-dev zlib1g-dev libblocksruntime-dev libxar-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
 
       - name: Build ldid and cctools (armv7)
         run: |
@@ -23,14 +23,13 @@ jobs:
           make -C /tmp/ldid -j$(nproc)
           sudo make -C /tmp/ldid install
 
-          git clone --depth=1 https://github.com/tpoechtrager/cctools-port.git /tmp/cctools
-          cd /tmp/cctools/cctools/BlocksRuntime
-          clang -c -fPIC runtime.c data.c
-          sudo ar rcs /usr/local/lib/libBlocksRuntime.a runtime.o data.o
-          sudo cp Block.h Block_private.h /usr/local/include/
+          sudo cp -f /usr/include/BlocksRuntime/*.h /usr/local/include/ 2>/dev/null || true
+          sudo find /usr/lib -name "libBlocksRuntime*" -exec cp -P {} /usr/local/lib/ \; 2>/dev/null || true
+          sudo ldconfig
 
+          git clone --depth=1 https://github.com/tpoechtrager/cctools-port.git /tmp/cctools
           cd /tmp/cctools/cctools
-          CC=clang CXX=clang++ CPPFLAGS="-I/usr/local/include" CFLAGS="-Wno-error -I/usr/local/include" CXXFLAGS="-Wno-error -std=gnu++14 -I/usr/local/include" LDFLAGS="-L/usr/local/lib" LIBS="-lBlocksRuntime" ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
+          CC=clang CXX=clang++ CPPFLAGS="-I/usr/local/include" CFLAGS="-Wno-error -fblocks -I/usr/local/include" CXXFLAGS="-Wno-error -fblocks -std=gnu++14 -I/usr/local/include" LDFLAGS="-L/usr/local/lib" ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support || { tail -n 60 config.log; exit 1; }
           make -j$(nproc)
           sudo make install
 
