@@ -8,7 +8,44 @@ static void zero_mem(void *ptr, size_t len) {
     }
 }
 
+@interface DocxRelsParserDelegate : NSObject <NSXMLParserDelegate>
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *imageRels;
+@end
+
+@implementation DocxRelsParserDelegate
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _imageRels = [NSMutableDictionary dictionary];
+    }
+    return self;
+}
+
+- (void)parser:(NSXMLParser *)parser didStartElement:(NSString *)elementName namespaceURI:(NSString *)namespaceURI qualifiedName:(NSString *)qName attributes:(NSDictionary<NSString *,NSString *> *)attributeDict {
+    if ([elementName isEqualToString:@"Relationship"]) {
+        NSString *rId = attributeDict[@"Id"];
+        NSString *type = attributeDict[@"Type"];
+        NSString *target = attributeDict[@"Target"];
+        if (rId && target && [type rangeOfString:@"image" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+            NSString *norm = target;
+            if ([norm hasPrefix:@"/"]) {
+                norm = [norm substringFromIndex:1];
+            } else if ([norm hasPrefix:@"./"]) {
+                norm = [@"word/" stringByAppendingString:[norm substringFromIndex:2]];
+            } else if (![norm hasPrefix:@"word/"]) {
+                norm = [@"word/" stringByAppendingString:norm];
+            }
+            self.imageRels[rId] = norm;
+        }
+    }
+}
+
+@end
+
 @interface DocxXMLParserDelegate : NSObject <NSXMLParserDelegate>
+@property (nonatomic, strong) NSDictionary<NSString *, NSData *> *zipEntries;
+@property (nonatomic, strong) NSDictionary<NSString *, NSString *> *imageRels;
 @property (nonatomic, strong) NSMutableAttributedString *result;
 @property (nonatomic, strong) NSMutableString *currentText;
 @property (nonatomic, assign) BOOL inParagraph;
@@ -21,6 +58,7 @@ static void zero_mem(void *ptr, size_t len) {
 @property (nonatomic, assign) NSTextAlignment alignment;
 @property (nonatomic, assign) BOOL isRTL;
 @property (nonatomic, assign) BOOL hasAppendedFirstParagraph;
+@property (nonatomic, assign) CGSize currentDrawingSize;
 @end
 
 @implementation DocxXMLParserDelegate
@@ -33,8 +71,23 @@ static void zero_mem(void *ptr, size_t len) {
         _fontSize = 18.0;
         _alignment = NSTextAlignmentRight;
         _isRTL = YES;
+        _currentDrawingSize = CGSizeZero;
     }
     return self;
+}
+
+- (UIImage *)downsampledImage:(UIImage *)image maxDimension:(CGFloat)maxDim {
+    if (!image) return nil;
+    CGFloat w = image.size.width;
+    CGFloat h = image.size.height;
+    if (w <= maxDim && h <= maxDim) return image;
+    CGFloat scale = maxDim / MAX(w, h);
+    CGSize newSize = CGSizeMake((CGFloat)(NSInteger)(w * scale + 0.5), (CGFloat)(NSInteger)(h * scale + 0.5));
+    UIGraphicsBeginImageContextWithOptions(newSize, NO, 1.0);
+    [image drawInRect:CGRectMake(0, 0, newSize.width, newSize.height)];
+    UIImage *resized = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return resized ?: image;
 }
 
 - (UIFont *)currentFont {
@@ -74,6 +127,42 @@ static void zero_mem(void *ptr, size_t len) {
         [self.result appendAttributedString:chunk];
         [self.currentText setString:@""];
     }
+}
+
+- (void)appendImageForRelID:(NSString *)relID {
+    if (!relID) return;
+    NSString *mediaPath = self.imageRels[relID];
+    if (!mediaPath) return;
+    NSData *imgData = self.zipEntries[mediaPath];
+    if (!imgData) return;
+
+    UIImage *rawImg = [UIImage imageWithData:imgData];
+    UIImage *img = [self downsampledImage:rawImg maxDimension:1024.0];
+    if (!img) return;
+
+    [self flushRunText];
+
+    CGFloat maxDisplayWidth = 480.0;
+    CGFloat targetW = img.size.width;
+    CGFloat targetH = img.size.height;
+
+    if (self.currentDrawingSize.width > 0 && self.currentDrawingSize.height > 0) {
+        targetW = self.currentDrawingSize.width;
+        targetH = self.currentDrawingSize.height;
+    }
+    if (targetW > maxDisplayWidth && targetW > 0) {
+        CGFloat ratio = maxDisplayWidth / targetW;
+        targetW = maxDisplayWidth;
+        targetH = (CGFloat)(NSInteger)(targetH * ratio + 0.5);
+    }
+
+    NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
+    attachment.image = img;
+    attachment.bounds = CGRectMake(0, 0, targetW, targetH);
+
+    NSMutableAttributedString *imgAttr = [[NSAttributedString attributedStringWithAttachment:attachment] mutableCopy];
+    [imgAttr addAttributes:[self currentAttributes] range:NSMakeRange(0, imgAttr.length)];
+    [self.result appendAttributedString:imgAttr];
 }
 
 - (void)parser:(NSXMLParser *)parser didStartElement:(NSString *)elementName namespaceURI:(NSString *)namespaceURI qualifiedName:(NSString *)qName attributes:(NSDictionary<NSString *,NSString *> *)attributeDict {
@@ -120,6 +209,20 @@ static void zero_mem(void *ptr, size_t len) {
         if (val.doubleValue > 0) {
             self.fontSize = val.doubleValue / 2.0;
         }
+    } else if ([elementName isEqualToString:@"w:drawing"]) {
+        self.currentDrawingSize = CGSizeZero;
+    } else if ([elementName isEqualToString:@"wp:extent"]) {
+        double cx = [attributeDict[@"cx"] doubleValue];
+        double cy = [attributeDict[@"cy"] doubleValue];
+        if (cx > 0 && cy > 0) {
+            self.currentDrawingSize = CGSizeMake(cx / 12700.0, cy / 12700.0);
+        }
+    } else if ([elementName isEqualToString:@"a:blip"]) {
+        NSString *embedId = attributeDict[@"r:embed"] ?: attributeDict[@"r:link"];
+        [self appendImageForRelID:embedId];
+    } else if ([elementName isEqualToString:@"v:imagedata"]) {
+        NSString *relId = attributeDict[@"r:id"] ?: attributeDict[@"o:relid"];
+        [self appendImageForRelID:relId];
     } else if ([elementName isEqualToString:@"w:t"]) {
         self.inText = YES;
     } else if ([elementName isEqualToString:@"w:br"]) {
@@ -138,6 +241,8 @@ static void zero_mem(void *ptr, size_t len) {
 - (void)parser:(NSXMLParser *)parser didEndElement:(NSString *)elementName namespaceURI:(NSString *)namespaceURI qualifiedName:(NSString *)qName {
     if ([elementName isEqualToString:@"w:t"]) {
         self.inText = NO;
+    } else if ([elementName isEqualToString:@"w:drawing"]) {
+        self.currentDrawingSize = CGSizeZero;
     } else if ([elementName isEqualToString:@"w:r"]) {
         [self flushRunText];
         self.inRun = NO;
@@ -174,7 +279,7 @@ static void zero_mem(void *ptr, size_t len) {
     [d appendBytes:b length:4];
 }
 
-+ (NSData *)extractDocumentXMLFromZipData:(NSData *)zipData {
++ (NSDictionary<NSString *, NSData *> *)extractZipEntriesFromData:(NSData *)zipData {
     const uint8_t *bytes = (const uint8_t *)zipData.bytes;
     NSUInteger len = zipData.length;
     if (len < 22) return nil;
@@ -193,6 +298,8 @@ static void zero_mem(void *ptr, size_t len) {
     uint32_t cdOffset = [self readUInt32:bytes + eocdOffset + 16];
     NSUInteger pos = cdOffset;
 
+    NSMutableDictionary<NSString *, NSData *> *entries = [NSMutableDictionary dictionary];
+
     for (uint16_t idx = 0; idx < totalEntries; idx++) {
         if (pos + 46 > len) break;
         if ([self readUInt32:bytes + pos] != 0x02014b50) break;
@@ -208,44 +315,45 @@ static void zero_mem(void *ptr, size_t len) {
         if (pos + 46 + nameLen > len) break;
         NSString *entryName = [[NSString alloc] initWithBytes:bytes + pos + 46 length:nameLen encoding:NSUTF8StringEncoding];
 
-        if ([entryName isEqualToString:@"word/document.xml"]) {
-            if (localOffset + 30 > len) return nil;
-            if ([self readUInt32:bytes + localOffset] != 0x04034b50) return nil;
+        if (entryName && localOffset + 30 <= len && [self readUInt32:bytes + localOffset] == 0x04034b50) {
             uint16_t localNameLen = [self readUInt16:bytes + localOffset + 26];
             uint16_t localExtraLen = [self readUInt16:bytes + localOffset + 28];
             NSUInteger dataStart = localOffset + 30 + localNameLen + localExtraLen;
-            if (dataStart + compSize > len) return nil;
+            if (dataStart + compSize <= len) {
+                if (uncompSize == 0) {
+                    entries[entryName] = [NSData data];
+                } else if (method == 0) {
+                    entries[entryName] = [zipData subdataWithRange:NSMakeRange(dataStart, uncompSize)];
+                } else if (method == 8) {
+                    NSMutableData *outData = [NSMutableData dataWithLength:uncompSize];
+                    z_stream strm;
+                    zero_mem(&strm, sizeof(strm));
+                    strm.next_in = (Bytef *)(bytes + dataStart);
+                    strm.avail_in = (uInt)compSize;
+                    strm.next_out = (Bytef *)outData.mutableBytes;
+                    strm.avail_out = (uInt)uncompSize;
 
-            if (method == 0) {
-                return [zipData subdataWithRange:NSMakeRange(dataStart, uncompSize)];
-            } else if (method == 8) {
-                NSMutableData *outData = [NSMutableData dataWithLength:uncompSize];
-                z_stream strm;
-                zero_mem(&strm, sizeof(strm));
-                strm.next_in = (Bytef *)(bytes + dataStart);
-                strm.avail_in = (uInt)compSize;
-                strm.next_out = (Bytef *)outData.mutableBytes;
-                strm.avail_out = (uInt)uncompSize;
-
-                if (inflateInit2(&strm, -MAX_WBITS) != Z_OK) return nil;
-                int ret = inflate(&strm, Z_FINISH);
-                inflateEnd(&strm);
-                if (ret == Z_STREAM_END || ret == Z_OK) {
-                    return outData;
+                    if (inflateInit2(&strm, -MAX_WBITS) == Z_OK) {
+                        int ret = inflate(&strm, Z_FINISH);
+                        inflateEnd(&strm);
+                        if (ret == Z_STREAM_END || ret == Z_OK) {
+                            entries[entryName] = outData;
+                        }
+                    }
                 }
-                return nil;
             }
         }
         pos += 46 + nameLen + extraLen + commentLen;
     }
-    return nil;
+    return entries;
 }
 
 + (NSAttributedString *)attributedStringFromDocxURL:(NSURL *)url error:(NSError **)error {
     NSData *zipData = [NSData dataWithContentsOfURL:url options:0 error:error];
     if (!zipData) return nil;
 
-    NSData *xmlData = [self extractDocumentXMLFromZipData:zipData];
+    NSDictionary<NSString *, NSData *> *entries = [self extractZipEntriesFromData:zipData];
+    NSData *xmlData = entries[@"word/document.xml"];
     if (!xmlData) {
         if (error) {
             *error = [NSError errorWithDomain:@"ArabicOfficeDocx" code:1001 userInfo:@{NSLocalizedDescriptionKey: @"تعذر قراءة محتوى ملف Word (.docx)"}];
@@ -253,7 +361,20 @@ static void zero_mem(void *ptr, size_t len) {
         return nil;
     }
 
+    NSDictionary<NSString *, NSString *> *imageRels = @{};
+    NSData *relsData = entries[@"word/_rels/document.xml.rels"];
+    if (relsData) {
+        DocxRelsParserDelegate *relsDelegate = [[DocxRelsParserDelegate alloc] init];
+        NSXMLParser *relsParser = [[NSXMLParser alloc] initWithData:relsData];
+        relsParser.delegate = relsDelegate;
+        [relsParser parse];
+        imageRels = relsDelegate.imageRels;
+    }
+
     DocxXMLParserDelegate *delegate = [[DocxXMLParserDelegate alloc] init];
+    delegate.zipEntries = entries;
+    delegate.imageRels = imageRels;
+
     NSXMLParser *parser = [[NSXMLParser alloc] initWithData:xmlData];
     parser.delegate = delegate;
     if (![parser parse]) {
@@ -273,10 +394,40 @@ static void zero_mem(void *ptr, size_t len) {
     return s;
 }
 
-+ (NSString *)buildDocumentXMLFromAttributedString:(NSAttributedString *)attrStr {
++ (NSData *)deflateRaw:(NSData *)rawData {
+    if (rawData.length == 0) return [NSData data];
+    z_stream strm;
+    zero_mem(&strm, sizeof(strm));
+    if (deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        return nil;
+    }
+    NSMutableData *compressed = [NSMutableData dataWithLength:deflateBound(&strm, (uLong)rawData.length)];
+    strm.next_in = (Bytef *)rawData.bytes;
+    strm.avail_in = (uInt)rawData.length;
+    strm.next_out = (Bytef *)compressed.mutableBytes;
+    strm.avail_out = (uInt)compressed.length;
+
+    deflate(&strm, Z_FINISH);
+    compressed.length = strm.total_out;
+    deflateEnd(&strm);
+    return compressed;
+}
+
++ (BOOL)writeAttributedString:(NSAttributedString *)attrStr toDocxURL:(NSURL *)url error:(NSError **)error {
     NSMutableString *xml = [NSMutableString string];
     [xml appendString:@"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"];
-    [xml appendString:@"<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\n<w:body>\n"];
+    [xml appendString:@"<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" "
+                      @"xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" "
+                      @"xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" "
+                      @"xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" "
+                      @"xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\n<w:body>\n"];
+
+    NSMutableArray<NSDictionary *> *mediaEntries = [NSMutableArray array];
+    NSMutableString *docRelsXML = [NSMutableString string];
+    [docRelsXML appendString:@"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"];
+    [docRelsXML appendString:@"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n"];
+
+    __block NSInteger imageCounter = 0;
 
     NSString *fullText = attrStr.string ?: @"";
     NSArray<NSString *> *lines = [fullText componentsSeparatedByString:@"\n"];
@@ -307,7 +458,45 @@ static void zero_mem(void *ptr, size_t len) {
 
         if (line.length > 0) {
             [attrStr enumerateAttributesInRange:lineRange options:0 usingBlock:^(NSDictionary<NSString *,id> *attrs, NSRange range, BOOL *stop) {
-                NSString *sub = [fullText substringWithRange:range];
+                NSTextAttachment *attachment = attrs[NSAttachmentAttributeName];
+                if (attachment && attachment.image) {
+                    UIImage *img = attachment.image;
+                    NSData *jpegData = UIImageJPEGRepresentation(img, 0.85);
+                    if (jpegData) {
+                        imageCounter++;
+                        NSString *rId = [NSString stringWithFormat:@"rId%ld", (long)imageCounter];
+                        NSString *fileName = [NSString stringWithFormat:@"image%ld.jpg", (long)imageCounter];
+                        NSString *zipPath = [NSString stringWithFormat:@"word/media/%@", fileName];
+
+                        [mediaEntries addObject:@{@"name": zipPath, @"data": jpegData}];
+                        [docRelsXML appendFormat:@"  <Relationship Id=\"%@\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/%@\"/>\n", rId, fileName];
+
+                        CGFloat dispW = (attachment.bounds.size.width > 0) ? attachment.bounds.size.width : MIN(450.0, img.size.width);
+                        CGFloat dispH = (attachment.bounds.size.height > 0) ? attachment.bounds.size.height : (img.size.width > 0 ? dispW * (img.size.height / img.size.width) : 300.0);
+                        long long cx = (long long)(dispW * 12700.0 + 0.5);
+                        long long cy = (long long)(dispH * 12700.0 + 0.5);
+
+                        [xml appendString:@"    <w:r>\n      <w:drawing>\n"];
+                        [xml appendString:@"        <wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">\n"];
+                        [xml appendFormat:@"          <wp:extent cx=\"%lld\" cy=\"%lld\"/>\n", cx, cy];
+                        [xml appendString:@"          <wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/>\n"];
+                        [xml appendFormat:@"          <wp:docPr id=\"%ld\" name=\"Picture %ld\"/>\n", (long)imageCounter, (long)imageCounter];
+                        [xml appendString:@"          <wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect=\"1\"/></wp:cNvGraphicFramePr>\n"];
+                        [xml appendString:@"          <a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\n"];
+                        [xml appendString:@"            <pic:pic>\n"];
+                        [xml appendFormat:@"              <pic:nvPicPr><pic:cNvPr id=\"%ld\" name=\"%@\"/><pic:cNvPicPr/></pic:nvPicPr>\n", (long)imageCounter, fileName];
+                        [xml appendFormat:@"              <pic:blipFill><a:blip r:embed=\"%@\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>\n", rId];
+                        [xml appendFormat:@"              <pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"%lld\" cy=\"%lld\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr>\n", cx, cy];
+                        [xml appendString:@"            </pic:pic>\n"];
+                        [xml appendString:@"          </a:graphicData></a:graphic>\n"];
+                        [xml appendString:@"        </wp:inline>\n      </w:drawing>\n    </w:r>\n"];
+                    }
+                    return;
+                }
+
+                NSString *sub = [[fullText substringWithRange:range] stringByReplacingOccurrencesOfString:@"\uFFFC" withString:@""];
+                if (sub.length == 0) return;
+
                 UIFont *font = attrs[NSFontAttributeName];
                 NSNumber *underline = attrs[NSUnderlineStyleAttributeName];
 
@@ -339,33 +528,15 @@ static void zero_mem(void *ptr, size_t len) {
     }
 
     [xml appendString:@"</w:body>\n</w:document>\n"];
-    return xml;
-}
+    [docRelsXML appendString:@"</Relationships>\n"];
 
-+ (NSData *)deflateRaw:(NSData *)rawData {
-    if (rawData.length == 0) return [NSData data];
-    z_stream strm;
-    zero_mem(&strm, sizeof(strm));
-    if (deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
-        return nil;
-    }
-    NSMutableData *compressed = [NSMutableData dataWithLength:deflateBound(&strm, (uLong)rawData.length)];
-    strm.next_in = (Bytef *)rawData.bytes;
-    strm.avail_in = (uInt)rawData.length;
-    strm.next_out = (Bytef *)compressed.mutableBytes;
-    strm.avail_out = (uInt)compressed.length;
-
-    deflate(&strm, Z_FINISH);
-    compressed.length = strm.total_out;
-    deflateEnd(&strm);
-    return compressed;
-}
-
-+ (BOOL)writeAttributedString:(NSAttributedString *)attrStr toDocxURL:(NSURL *)url error:(NSError **)error {
     NSString *contentTypes = @"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
                              @"<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\n"
                              @"  <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\n"
                              @"  <Default Extension=\"xml\" ContentType=\"application/xml\"/>\n"
+                             @"  <Default Extension=\"jpg\" ContentType=\"image/jpeg\"/>\n"
+                             @"  <Default Extension=\"jpeg\" ContentType=\"image/jpeg\"/>\n"
+                             @"  <Default Extension=\"png\" ContentType=\"image/png\"/>\n"
                              @"  <Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>\n"
                              @"</Types>\n";
 
@@ -374,18 +545,13 @@ static void zero_mem(void *ptr, size_t len) {
                      @"  <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>\n"
                      @"</Relationships>\n";
 
-    NSString *docRels = @"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
-                        @"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n"
-                        @"</Relationships>\n";
-
-    NSString *docXML = [self buildDocumentXMLFromAttributedString:attrStr];
-
-    NSArray<NSDictionary *> *entries = @[
+    NSMutableArray<NSDictionary *> *entries = [NSMutableArray arrayWithArray:@[
         @{@"name": @"[Content_Types].xml", @"data": [contentTypes dataUsingEncoding:NSUTF8StringEncoding]},
         @{@"name": @"_rels/.rels", @"data": [rels dataUsingEncoding:NSUTF8StringEncoding]},
-        @{@"name": @"word/_rels/document.xml.rels", @"data": [docRels dataUsingEncoding:NSUTF8StringEncoding]},
-        @{@"name": @"word/document.xml", @"data": [docXML dataUsingEncoding:NSUTF8StringEncoding]}
-    ];
+        @{@"name": @"word/_rels/document.xml.rels", @"data": [docRelsXML dataUsingEncoding:NSUTF8StringEncoding]},
+        @{@"name": @"word/document.xml", @"data": [xml dataUsingEncoding:NSUTF8StringEncoding]}
+    ]];
+    [entries addObjectsFromArray:mediaEntries];
 
     NSMutableData *zip = [NSMutableData data];
     NSMutableData *centralDir = [NSMutableData data];
