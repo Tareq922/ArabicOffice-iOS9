@@ -32,19 +32,24 @@ jobs:
 
           cat << 'EOF' > "$BIN_DIR/clang"
           #!/bin/bash
+          BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           ARGS=()
           SKIP_NEXT=0
+          IS_COMPILE_ONLY=0
           for arg in "$@"; do
             if [ $SKIP_NEXT -eq 1 ]; then
               SKIP_NEXT=0
               continue
             fi
-            if [ "$arg" = "-arch" ] || [ "$arg" = "-target" ]; then
+            if [ "$arg" = "-arch" ] || [ "$arg" = "-target" ] || [ "$arg" = "--target" ]; then
               SKIP_NEXT=1
               continue
             fi
-            if [[ "$arg" == --target=* ]] || [ "$arg" = "-m64" ] || [ "$arg" = "-m32" ]; then
+            if [[ "$arg" == --target=* ]] || [ "$arg" = "-m64" ] || [ "$arg" = "-m32" ] || [[ "$arg" == -march=* ]] || [[ "$arg" == -mcpu=* ]] || [[ "$arg" == -mtune=* ]]; then
               continue
+            fi
+            if [ "$arg" = "-c" ] || [ "$arg" = "-S" ] || [ "$arg" = "-E" ]; then
+              IS_COMPILE_ONLY=1
             fi
             if [[ "$arg" == -I*/_fallback ]]; then
               ARGS+=("-idirafter${arg#-I}")
@@ -52,6 +57,9 @@ jobs:
             fi
             ARGS+=("$arg")
           done
+          if [ $IS_COMPILE_ONLY -eq 0 ]; then
+            ARGS+=("--ld-path=$BIN_DIR/ld")
+          fi
           exec /usr/bin/clang "${ARGS[@]}" --target=armv7-apple-ios9.0
           EOF
           chmod +x "$BIN_DIR/clang"
@@ -59,19 +67,24 @@ jobs:
 
           cat << 'EOF' > "$BIN_DIR/clang++"
           #!/bin/bash
+          BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           ARGS=()
           SKIP_NEXT=0
+          IS_COMPILE_ONLY=0
           for arg in "$@"; do
             if [ $SKIP_NEXT -eq 1 ]; then
               SKIP_NEXT=0
               continue
             fi
-            if [ "$arg" = "-arch" ] || [ "$arg" = "-target" ]; then
+            if [ "$arg" = "-arch" ] || [ "$arg" = "-target" ] || [ "$arg" = "--target" ]; then
               SKIP_NEXT=1
               continue
             fi
-            if [[ "$arg" == --target=* ]] || [ "$arg" = "-m64" ] || [ "$arg" = "-m32" ]; then
+            if [[ "$arg" == --target=* ]] || [ "$arg" = "-m64" ] || [ "$arg" = "-m32" ] || [[ "$arg" == -march=* ]] || [[ "$arg" == -mcpu=* ]] || [[ "$arg" == -mtune=* ]]; then
               continue
+            fi
+            if [ "$arg" = "-c" ] || [ "$arg" = "-S" ] || [ "$arg" = "-E" ]; then
+              IS_COMPILE_ONLY=1
             fi
             if [[ "$arg" == -I*/_fallback ]]; then
               ARGS+=("-idirafter${arg#-I}")
@@ -79,6 +92,9 @@ jobs:
             fi
             ARGS+=("$arg")
           done
+          if [ $IS_COMPILE_ONLY -eq 0 ]; then
+            ARGS+=("--ld-path=$BIN_DIR/ld")
+          fi
           exec /usr/bin/clang++ "${ARGS[@]}" --target=armv7-apple-ios9.0
           EOF
           chmod +x "$BIN_DIR/clang++"
@@ -130,7 +146,12 @@ jobs:
       - name: Compile and Package IPA (armv7)
         run: |
           export THEOS=$HOME/theos
-          make stage DEBUG=0
+          export PATH="$HOME/theos/toolchain/linux/iphone/bin:$PATH"
+          make stage DEBUG=0 \
+            TARGET_CC="$HOME/theos/toolchain/linux/iphone/bin/clang" \
+            TARGET_CXX="$HOME/theos/toolchain/linux/iphone/bin/clang++" \
+            TARGET_LD="$HOME/theos/toolchain/linux/iphone/bin/ld" \
+            TARGET_STRIP="$HOME/theos/toolchain/linux/iphone/bin/strip"
           mkdir -p build/Payload
           cp -r .theos/_/Applications/*.app build/Payload/
           cd build && zip -r ../ArabicOffice-iOS9-armv7.ipa Payload
