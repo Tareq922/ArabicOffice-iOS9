@@ -68,6 +68,7 @@ jobs:
             ./configure --prefix=/usr/local --target=arm-apple-darwin11 --with-libtapi=/usr/local --disable-lto-support
           make -j$(nproc)
           make install
+          ln -sf /usr/local/bin/arm-apple-darwin11-codesign_allocate /usr/local/bin/codesign_allocate
 
       - name: Setup Theos and iOS 9.3 SDK
         run: |
@@ -158,6 +159,36 @@ jobs:
 
           git clone --depth=1 https://github.com/theos/sdks.git /tmp/sdks
           cp -r /tmp/sdks/iPhoneOS9.3.sdk $HOME/theos/sdks/
+
+          python3 - << 'PYEOF'
+          import os, re
+          sdk = os.path.expanduser("~/theos/sdks/iPhoneOS9.3.sdk")
+          reexports = set()
+          for root, _, files in os.walk(sdk):
+              for f in files:
+                  if f.endswith(".tbd"):
+                      p = os.path.join(root, f)
+                      with open(p, "r", encoding="utf-8", errors="ignore") as fp:
+                          txt = fp.read()
+                      txt = re.sub(r"platform:\s*iossimulator", "platform: ios", txt)
+                      txt = re.sub(r"archs:\s*\[[^\]]*\]", "archs: [ armv7, armv7s, arm64 ]", txt)
+                      with open(p, "w", encoding="utf-8") as fp:
+                          fp.write(txt)
+                      m = re.search(r"re-exports:\s*\[([^\]]*)\]", txt, re.S)
+                      if m:
+                          for item in m.group(1).split(","):
+                              item = item.strip().strip("'\"")
+                              if item.startswith("/usr/lib/"):
+                                  reexports.add(item)
+          for item in reexports:
+              rel = item.lstrip("/")
+              tbd_path = os.path.join(sdk, os.path.splitext(rel)[0] + ".tbd")
+              dylib_path = os.path.join(sdk, rel)
+              if not os.path.exists(tbd_path) and not os.path.exists(dylib_path):
+                  os.makedirs(os.path.dirname(tbd_path), exist_ok=True)
+                  with open(tbd_path, "w", encoding="utf-8") as fp:
+                      fp.write(f"---\narchs: [ armv7, armv7s, arm64 ]\nplatform: ios\ninstall-name: {item}\ncurrent-version: 1.0.0\ncompatibility-version: 1.0.0\nexports:\n  - archs: [ armv7, armv7s, arm64 ]\n...\n")
+          PYEOF
 
           echo "void __dummy_rt(void) {}" > /tmp/dummy.c
           /usr/bin/clang --target=armv7-apple-ios9.0 -isysroot $HOME/theos/sdks/iPhoneOS9.3.sdk -c /tmp/dummy.c -o /tmp/dummy.o
