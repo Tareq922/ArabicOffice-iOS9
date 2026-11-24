@@ -17,9 +17,9 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates clang g++ cmake llvm-dev uuid-dev libssl-dev libplist-dev zlib1g-dev libxml2-dev libblocksruntime-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot rsync
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates clang g++ cmake python3 llvm-dev uuid-dev libssl-dev libplist-dev zlib1g-dev libxml2-dev libblocksruntime-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot rsync
 
-      - name: Build ldid, xar, libdispatch, and cctools (armv7)
+      - name: Build ldid, xar, libdispatch, libtapi, and cctools (armv7)
         run: |
           cp -f /usr/include/BlocksRuntime/*.h /usr/local/include/ 2>/dev/null || true
 
@@ -52,6 +52,12 @@ jobs:
           make install
           ldconfig
 
+          git clone --depth=1 https://github.com/tpoechtrager/apple-libtapi.git /tmp/apple-libtapi
+          cd /tmp/apple-libtapi
+          INSTALLPREFIX=/usr/local ./build.sh
+          ./install.sh
+          ldconfig
+
           git clone --depth=1 https://github.com/tpoechtrager/cctools-port.git /tmp/cctools
           cd /tmp/cctools/cctools
           CC=clang CXX=clang++ \
@@ -59,7 +65,7 @@ jobs:
             CFLAGS="-Wno-error -std=gnu17 -I/usr/local/include" \
             CXXFLAGS="-Wno-error -std=gnu++14 -I/usr/local/include" \
             LDFLAGS="-L/usr/local/lib" \
-            ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
+            ./configure --prefix=/usr/local --target=arm-apple-darwin11 --with-libtapi=/usr/local --disable-lto-support
           make -j$(nproc)
           make install
 
