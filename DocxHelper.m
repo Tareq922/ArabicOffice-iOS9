@@ -1,6 +1,13 @@
 #import "DocxHelper.h"
 #import <zlib.h>
 
+static void zero_mem(void *ptr, size_t len) {
+    volatile uint8_t *p = (volatile uint8_t *)ptr;
+    while (len--) {
+        *p++ = 0;
+    }
+}
+
 @interface DocxXMLParserDelegate : NSObject <NSXMLParserDelegate>
 @property (nonatomic, strong) NSMutableAttributedString *result;
 @property (nonatomic, strong) NSMutableString *currentText;
@@ -79,8 +86,6 @@
         self.inParagraph = YES;
         self.alignment = NSTextAlignmentRight;
         self.isRTL = YES;
-    } else if ([elementName isEqualToString:@"w:pPr"] && self.inParagraph) {
-        // Paragraph properties
     } else if ([elementName isEqualToString:@"w:bidi"] && self.inParagraph) {
         NSString *val = attributeDict[@"w:val"];
         self.isRTL = !(val && ([val isEqualToString:@"0"] || [val isEqualToString:@"false"]));
@@ -216,7 +221,7 @@
             } else if (method == 8) {
                 NSMutableData *outData = [NSMutableData dataWithLength:uncompSize];
                 z_stream strm;
-                memset(&strm, 0, sizeof(strm));
+                zero_mem(&strm, sizeof(strm));
                 strm.next_in = (Bytef *)(bytes + dataStart);
                 strm.avail_in = (uInt)compSize;
                 strm.next_out = (Bytef *)outData.mutableBytes;
@@ -316,7 +321,7 @@
                     italic = (traits & UIFontDescriptorTraitItalic) != 0 || ([font.fontName rangeOfString:@"Italic" options:NSCaseInsensitiveSearch].location != NSNotFound);
                 }
                 BOOL under = (underline && underline.integerValue != NSUnderlineStyleNone);
-                NSInteger halfPts = (NSInteger)round(size * 2.0);
+                NSInteger halfPts = (NSInteger)(size * 2.0 + 0.5);
 
                 [xml appendString:@"    <w:r>\n      <w:rPr>"];
                 if (isRTL) [xml appendString:@"<w:rtl/>"];
@@ -340,7 +345,7 @@
 + (NSData *)deflateRaw:(NSData *)rawData {
     if (rawData.length == 0) return [NSData data];
     z_stream strm;
-    memset(&strm, 0, sizeof(strm));
+    zero_mem(&strm, sizeof(strm));
     if (deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
         return nil;
     }
@@ -396,7 +401,6 @@
         crc = crc32(crc, (const Bytef *)rawData.bytes, (uInt)rawData.length);
         uint32_t localOffset = (uint32_t)zip.length;
 
-        // Local file header
         [self appendUInt32:0x04034b50 toData:zip];
         [self appendUInt16:20 toData:zip];
         [self appendUInt16:0 toData:zip];
@@ -411,7 +415,6 @@
         [zip appendData:nameData];
         [zip appendData:compData];
 
-        // Central directory header
         [self appendUInt32:0x02014b50 toData:centralDir];
         [self appendUInt16:20 toData:centralDir];
         [self appendUInt16:20 toData:centralDir];
@@ -435,7 +438,6 @@
     uint32_t cdOffset = (uint32_t)zip.length;
     [zip appendData:centralDir];
 
-    // End of central directory
     [self appendUInt32:0x06054b50 toData:zip];
     [self appendUInt16:0 toData:zip];
     [self appendUInt16:0 toData:zip];
