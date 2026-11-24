@@ -39,8 +39,11 @@ jobs:
               SKIP_NEXT=0
               continue
             fi
-            if [ "$arg" = "-arch" ]; then
+            if [ "$arg" = "-arch" ] || [ "$arg" = "-target" ]; then
               SKIP_NEXT=1
+              continue
+            fi
+            if [[ "$arg" == --target=* ]] || [ "$arg" = "-m64" ] || [ "$arg" = "-m32" ]; then
               continue
             fi
             if [[ "$arg" == -I*/_fallback ]]; then
@@ -49,7 +52,7 @@ jobs:
             fi
             ARGS+=("$arg")
           done
-          exec /usr/bin/clang -target armv7-apple-ios9.0 "${ARGS[@]}"
+          exec /usr/bin/clang "${ARGS[@]}" --target=armv7-apple-ios9.0
           EOF
           chmod +x "$BIN_DIR/clang"
           cp "$BIN_DIR/clang" "$BIN_DIR/arm-apple-darwin11-clang"
@@ -63,8 +66,11 @@ jobs:
               SKIP_NEXT=0
               continue
             fi
-            if [ "$arg" = "-arch" ]; then
+            if [ "$arg" = "-arch" ] || [ "$arg" = "-target" ]; then
               SKIP_NEXT=1
+              continue
+            fi
+            if [[ "$arg" == --target=* ]] || [ "$arg" = "-m64" ] || [ "$arg" = "-m32" ]; then
               continue
             fi
             if [[ "$arg" == -I*/_fallback ]]; then
@@ -73,7 +79,7 @@ jobs:
             fi
             ARGS+=("$arg")
           done
-          exec /usr/bin/clang++ -target armv7-apple-ios9.0 "${ARGS[@]}"
+          exec /usr/bin/clang++ "${ARGS[@]}" --target=armv7-apple-ios9.0
           EOF
           chmod +x "$BIN_DIR/clang++"
           cp "$BIN_DIR/clang++" "$BIN_DIR/arm-apple-darwin11-clang++"
@@ -115,15 +121,16 @@ jobs:
           cp -r /tmp/sdks/iPhoneOS9.3.sdk $HOME/theos/sdks/
 
           echo "void __dummy_rt(void) {}" > /tmp/dummy.c
-          /usr/bin/clang -target armv7-apple-ios9.0 -isysroot $HOME/theos/sdks/iPhoneOS9.3.sdk -c /tmp/dummy.c -o /tmp/dummy.o
+          /usr/bin/clang --target=armv7-apple-ios9.0 -isysroot $HOME/theos/sdks/iPhoneOS9.3.sdk -c /tmp/dummy.c -o /tmp/dummy.o
           CLANG_RES_DIR=$(/usr/bin/clang -print-resource-dir)
           sudo mkdir -p "$CLANG_RES_DIR/lib/darwin"
           sudo llvm-ar rcs "$CLANG_RES_DIR/lib/darwin/libclang_rt.ios.a" /tmp/dummy.o
+          sudo cp "$CLANG_RES_DIR/lib/darwin/libclang_rt.ios.a" "$CLANG_RES_DIR/lib/darwin/libclang_rt.ios_armv7.a"
 
       - name: Compile and Package IPA (armv7)
         run: |
           export THEOS=$HOME/theos
-          make stage
+          make stage DEBUG=0
           mkdir -p build/Payload
           cp -r .theos/_/Applications/*.app build/Payload/
           cd build && zip -r ../ArabicOffice-iOS9-armv7.ipa Payload
