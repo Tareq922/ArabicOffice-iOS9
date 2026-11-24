@@ -1,7 +1,7 @@
 #import <UIKit/UIKit.h>
 #import "DocxHelper.h"
 
-@interface EditorViewController : UIViewController <UITextViewDelegate>
+@interface EditorViewController : UIViewController <UITextViewDelegate, UIImagePickerControllerDelegate, UINavigationControllerDelegate>
 @property (nonatomic, strong) UITextView *textView;
 @property (nonatomic, strong) NSURL *currentFileURL;
 @property (nonatomic, strong) UIBarButtonItem *saveShareItem;
@@ -41,6 +41,7 @@
 - (void)setupFormattingToolbar {
     UIToolbar *toolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
     UIBarButtonItem *hideKB = [[UIBarButtonItem alloc] initWithTitle:@"إخفاء الكيبورد" style:UIBarButtonItemStylePlain target:self.textView action:@selector(resignFirstResponder)];
+    UIBarButtonItem *insertImg = [[UIBarButtonItem alloc] initWithTitle:@"إدراج صورة" style:UIBarButtonItemStylePlain target:self action:@selector(pickImage)];
     UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
     UIBarButtonItem *fontMinus = [[UIBarButtonItem alloc] initWithTitle:@"خط -" style:UIBarButtonItemStylePlain target:self action:@selector(decreaseFont)];
     UIBarButtonItem *fontPlus = [[UIBarButtonItem alloc] initWithTitle:@"خط +" style:UIBarButtonItemStylePlain target:self action:@selector(increaseFont)];
@@ -48,8 +49,69 @@
     UIBarButtonItem *italic = [[UIBarButtonItem alloc] initWithTitle:@"مائل I" style:UIBarButtonItemStylePlain target:self action:@selector(toggleItalic)];
     UIBarButtonItem *bold = [[UIBarButtonItem alloc] initWithTitle:@"عريض B" style:UIBarButtonItemStyleDone target:self action:@selector(toggleBold)];
 
-    toolbar.items = @[hideKB, flex, fontMinus, fontPlus, underline, italic, bold];
+    toolbar.items = @[hideKB, insertImg, flex, fontMinus, fontPlus, underline, italic, bold];
     self.textView.inputAccessoryView = toolbar;
+}
+
+- (void)pickImage {
+    UIImagePickerController *picker = [[UIImagePickerController alloc] init];
+    picker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
+    picker.delegate = self;
+    picker.modalPresentationStyle = UIModalPresentationFormSheet;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)imagePickerController:(UIImagePickerController *)picker didFinishPickingMediaWithInfo:(NSDictionary<NSString *,id> *)info {
+    UIImage *picked = info[UIImagePickerControllerOriginalImage];
+    [picker dismissViewControllerAnimated:YES completion:^{
+        if (!picked) return;
+
+        CGFloat maxDim = 1024.0;
+        UIImage *finalImg = picked;
+        if (picked.size.width > maxDim || picked.size.height > maxDim) {
+            CGFloat scale = maxDim / MAX(picked.size.width, picked.size.height);
+            CGSize newSize = CGSizeMake((CGFloat)(NSInteger)(picked.size.width * scale + 0.5), (CGFloat)(NSInteger)(picked.size.height * scale + 0.5));
+            UIGraphicsBeginImageContextWithOptions(newSize, NO, 1.0);
+            [picked drawInRect:CGRectMake(0, 0, newSize.width, newSize.height)];
+            UIImage *resized = UIGraphicsGetImageFromCurrentImageContext();
+            UIGraphicsEndImageContext();
+            if (resized) finalImg = resized;
+        }
+
+        CGFloat maxDisplayW = 460.0;
+        CGFloat dispW = finalImg.size.width;
+        CGFloat dispH = finalImg.size.height;
+        if (dispW > maxDisplayW && dispW > 0) {
+            CGFloat ratio = maxDisplayW / dispW;
+            dispW = maxDisplayW;
+            dispH = (CGFloat)(NSInteger)(dispH * ratio + 0.5);
+        }
+
+        NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
+        attachment.image = finalImg;
+        attachment.bounds = CGRectMake(0, 0, dispW, dispH);
+
+        NSMutableAttributedString *imgStr = [[NSAttributedString attributedStringWithAttachment:attachment] mutableCopy];
+        [imgStr addAttributes:[self defaultArabicAttributes] range:NSMakeRange(0, imgStr.length)];
+
+        NSMutableAttributedString *insertion = [[NSMutableAttributedString alloc] initWithString:@"\n" attributes:[self defaultArabicAttributes]];
+        [insertion appendAttributedString:imgStr];
+        [insertion appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n" attributes:[self defaultArabicAttributes]]];
+
+        NSRange sel = self.textView.selectedRange;
+        if (sel.location == NSNotFound || sel.location > self.textView.attributedText.length) {
+            sel = NSMakeRange(self.textView.attributedText.length, 0);
+        }
+
+        NSMutableAttributedString *full = [self.textView.attributedText mutableCopy];
+        [full replaceCharactersInRange:sel withAttributedString:insertion];
+        self.textView.attributedText = full;
+        self.textView.selectedRange = NSMakeRange(sel.location + insertion.length, 0);
+    }];
+}
+
+- (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
+    [picker dismissViewControllerAnimated:YES completion:nil];
 }
 
 - (void)keyboardChanged:(NSNotification *)note {
@@ -139,7 +201,7 @@
 - (void)saveAndShare {
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"حفظ ومشاركة المستند" message:@"اختر صيغة الملف المطلوبة:" preferredStyle:UIAlertControllerStyleActionSheet];
 
-    [sheet addAction:[UIAlertAction actionWithTitle:@"ملف Word (.docx)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    [sheet addAction:[UIAlertAction actionWithTitle:@"ملف Word مع الصور (.docx)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         [self promptFilenameAndSaveWithExtension:@"docx"];
     }]];
 
