@@ -66,6 +66,7 @@ static void zero_mem(void *ptr, size_t len) {
 @property (nonatomic, assign) BOOL inTable;
 @property (nonatomic, assign) BOOL inTableRow;
 @property (nonatomic, assign) BOOL inTableCell;
+@property (nonatomic, assign) NSInteger tableRowIndex;
 @property (nonatomic, assign) BOOL isFirstCellInRow;
 @property (nonatomic, assign) BOOL isFirstParagraphInCell;
 @end
@@ -118,6 +119,7 @@ static void zero_mem(void *ptr, size_t len) {
 }
 
 - (UIFont *)currentFont {
+    BOOL effectiveBold = self.isBold || (self.inTableRow && self.tableRowIndex == 0);
     NSString *baseFamily = @"Arial";
     if (self.requestedFontFamily.length > 0) {
         NSString *low = self.requestedFontFamily.lowercaseString;
@@ -128,14 +130,14 @@ static void zero_mem(void *ptr, size_t len) {
 
     NSString *fontName = @"ArialMT";
     if ([baseFamily isEqualToString:@"GeezaPro"]) {
-        fontName = self.isBold ? @"GeezaPro-Bold" : @"GeezaPro";
+        fontName = effectiveBold ? @"GeezaPro-Bold" : @"GeezaPro";
     } else if ([baseFamily isEqualToString:@"Damascus"]) {
-        fontName = self.isBold ? @"DamascusBold" : @"Damascus";
+        fontName = effectiveBold ? @"DamascusBold" : @"Damascus";
     } else if ([baseFamily isEqualToString:@"Baghdad"]) {
         fontName = @"Baghdad";
     } else {
-        if (self.isBold && self.isItalic) fontName = @"Arial-BoldItalicMT";
-        else if (self.isBold) fontName = @"Arial-BoldMT";
+        if (effectiveBold && self.isItalic) fontName = @"Arial-BoldItalicMT";
+        else if (effectiveBold) fontName = @"Arial-BoldMT";
         else if (self.isItalic) fontName = @"Arial-ItalicMT";
     }
 
@@ -145,7 +147,7 @@ static void zero_mem(void *ptr, size_t len) {
 
     UIFont *font = [UIFont fontWithName:fontName size:self.fontSize];
     if (!font) {
-        font = self.isBold ? [UIFont boldSystemFontOfSize:self.fontSize] : [UIFont systemFontOfSize:self.fontSize];
+        font = effectiveBold ? [UIFont boldSystemFontOfSize:self.fontSize] : [UIFont systemFontOfSize:self.fontSize];
     }
     if (font) self.fontCache[key] = font;
     return font;
@@ -155,11 +157,17 @@ static void zero_mem(void *ptr, size_t len) {
     NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
     para.alignment = self.alignment;
     para.baseWritingDirection = self.isRTL ? NSWritingDirectionRightToLeft : NSWritingDirectionLeftToRight;
+    if (self.inTableRow) {
+        para.lineSpacing = 4.0;
+    }
 
     NSMutableDictionary *attrs = [NSMutableDictionary dictionary];
     attrs[NSFontAttributeName] = [self currentFont];
     attrs[NSParagraphStyleAttributeName] = para;
     attrs[NSForegroundColorAttributeName] = self.textColor ?: [UIColor blackColor];
+    if (self.inTableRow && self.tableRowIndex == 0) {
+        attrs[NSBackgroundColorAttributeName] = [UIColor colorWithRed:0.91 green:0.94 blue:0.98 alpha:1.0];
+    }
     if (self.isUnderline) {
         attrs[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
     }
@@ -212,6 +220,7 @@ static void zero_mem(void *ptr, size_t len) {
 - (void)parser:(NSXMLParser *)parser didStartElement:(NSString *)elementName namespaceURI:(NSString *)namespaceURI qualifiedName:(NSString *)qName attributes:(NSDictionary<NSString *,NSString *> *)attributeDict {
     if ([elementName isEqualToString:@"w:tbl"]) {
         self.inTable = YES;
+        self.tableRowIndex = 0;
         if (self.hasAppendedFirstParagraph) {
             NSAttributedString *nl = [[NSAttributedString alloc] initWithString:@"\n" attributes:[self currentAttributes]];
             [self.result appendAttributedString:nl];
@@ -227,8 +236,8 @@ static void zero_mem(void *ptr, size_t len) {
         self.isFirstParagraphInCell = YES;
         if (!self.isFirstCellInRow) {
             NSMutableDictionary *sepAttrs = [[self currentAttributes] mutableCopy];
-            sepAttrs[NSForegroundColorAttributeName] = [UIColor grayColor];
-            NSAttributedString *sep = [[NSAttributedString alloc] initWithString:@"  |  " attributes:sepAttrs];
+            sepAttrs[NSForegroundColorAttributeName] = [UIColor colorWithRed:0.25 green:0.45 blue:0.75 alpha:1.0];
+            NSAttributedString *sep = [[NSAttributedString alloc] initWithString:@" │ " attributes:sepAttrs];
             [self.result appendAttributedString:sep];
         }
         self.isFirstCellInRow = NO;
@@ -336,9 +345,11 @@ static void zero_mem(void *ptr, size_t len) {
         [self flushRunText];
         NSAttributedString *nl = [[NSAttributedString alloc] initWithString:@"\n" attributes:[self currentAttributes]];
         [self.result appendAttributedString:nl];
+        self.tableRowIndex++;
         self.inTableRow = NO;
     } else if ([elementName isEqualToString:@"w:tbl"]) {
         self.inTable = NO;
+        self.tableRowIndex = 0;
     }
 }
 
@@ -497,6 +508,154 @@ static void zero_mem(void *ptr, size_t len) {
     return nil;
 }
 
++ (BOOL)isTableLine:(NSString *)line {
+    if (line.length == 0) return NO;
+    return ([line rangeOfString:@"│"].location != NSNotFound || [line rangeOfString:@"|"].location != NSNotFound);
+}
+
++ (void)appendFormattedRunsFromAttributedString:(NSAttributedString *)attrStr inRange:(NSRange)range isRTL:(BOOL)isRTL trimPadding:(BOOL)trimPad toXML:(NSMutableString *)xml {
+    NSString *fullText = attrStr.string ?: @"";
+    if (range.length == 0 || NSMaxRange(range) > fullText.length) return;
+
+    __block NSUInteger currentLoc = range.location;
+    NSUInteger endLoc = NSMaxRange(range);
+
+    [attrStr enumerateAttributesInRange:range options:0 usingBlock:^(NSDictionary<NSString *,id> *attrs, NSRange subRange, BOOL *stop) {
+        if (attrs[NSAttachmentAttributeName]) return;
+        NSString *sub = [[fullText substringWithRange:subRange] stringByReplacingOccurrencesOfString:@"\uFFFC" withString:@""];
+        if (trimPad) {
+            if (subRange.location == range.location) {
+                while ([sub hasPrefix:@" "]) sub = [sub substringFromIndex:1];
+            }
+            if (NSMaxRange(subRange) == endLoc) {
+                while ([sub hasSuffix:@" "]) sub = [sub substringToIndex:sub.length - 1];
+            }
+        }
+        currentLoc = NSMaxRange(subRange);
+        if (sub.length == 0) return;
+
+        UIFont *font = attrs[NSFontAttributeName];
+        NSNumber *underline = attrs[NSUnderlineStyleAttributeName];
+        UIColor *fgColor = attrs[NSForegroundColorAttributeName];
+
+        BOOL bold = NO;
+        BOOL italic = NO;
+        CGFloat size = 18.0;
+        NSString *exportFont = @"Arial";
+        if (font) {
+            size = font.pointSize;
+            NSString *fn = font.fontName;
+            if ([fn rangeOfString:@"Geeza" options:NSCaseInsensitiveSearch].location != NSNotFound) exportFont = @"Geeza Pro";
+            else if ([fn rangeOfString:@"Damascus" options:NSCaseInsensitiveSearch].location != NSNotFound) exportFont = @"Damascus";
+            else if ([fn rangeOfString:@"Baghdad" options:NSCaseInsensitiveSearch].location != NSNotFound) exportFont = @"Baghdad";
+
+            UIFontDescriptorSymbolicTraits traits = font.fontDescriptor.symbolicTraits;
+            bold = (traits & UIFontDescriptorTraitBold) != 0 || ([fn rangeOfString:@"Bold" options:NSCaseInsensitiveSearch].location != NSNotFound);
+            italic = (traits & UIFontDescriptorTraitItalic) != 0 || ([fn rangeOfString:@"Italic" options:NSCaseInsensitiveSearch].location != NSNotFound);
+        }
+        BOOL under = (underline && underline.integerValue != NSUnderlineStyleNone);
+        NSInteger halfPts = (NSInteger)(size * 2.0 + 0.5);
+        NSString *hexColor = [self hexStringFromColor:fgColor];
+
+        [xml appendString:@"    <w:r>\n      <w:rPr>"];
+        [xml appendFormat:@"<w:rFonts w:ascii=\"%@\" w:hAnsi=\"%@\" w:cs=\"%@\"/>", exportFont, exportFont, exportFont];
+        if (isRTL) [xml appendString:@"<w:rtl/>"];
+        if (bold) [xml appendString:@"<w:b/>"];
+        if (italic) [xml appendString:@"<w:i/>"];
+        if (under) [xml appendString:@"<w:u w:val=\"single\"/>"];
+        if (hexColor) [xml appendFormat:@"<w:color w:val=\"%@\"/>", hexColor];
+        [xml appendFormat:@"<w:sz w:val=\"%ld\"/><w:szCs w:val=\"%ld\"/>", (long)halfPts, (long)halfPts];
+        [xml appendString:@"</w:rPr>\n"];
+        [xml appendFormat:@"      <w:t xml:space=\"preserve\">%@</w:t>\n    </w:r>\n", [self escapeXML:sub]];
+    }];
+}
+
++ (void)appendTableFromAttributedString:(NSAttributedString *)attrStr rowRanges:(NSArray<NSValue *> *)rowRanges toXML:(NSMutableString *)xml {
+    if (rowRanges.count == 0) return;
+    NSString *fullText = attrStr.string ?: @"";
+
+    NSMutableArray<NSArray<NSValue *> *> *allRowsCells = [NSMutableArray arrayWithCapacity:rowRanges.count];
+    NSInteger maxCols = 1;
+
+    for (NSValue *val in rowRanges) {
+        NSRange rowRange = [val rangeValue];
+        NSString *rowStr = [fullText substringWithRange:rowRange];
+        NSString *sep = ([rowStr rangeOfString:@"│"].location != NSNotFound) ? @"│" : @"|";
+
+        NSMutableArray<NSValue *> *cellRanges = [NSMutableArray array];
+        NSUInteger searchStart = 0;
+        while (searchStart <= rowStr.length) {
+            NSRange found = [rowStr rangeOfString:sep options:0 range:NSMakeRange(searchStart, rowStr.length - searchStart)];
+            if (found.location == NSNotFound) {
+                [cellRanges addObject:[NSValue valueWithRange:NSMakeRange(rowRange.location + searchStart, rowStr.length - searchStart)]];
+                break;
+            } else {
+                [cellRanges addObject:[NSValue valueWithRange:NSMakeRange(rowRange.location + searchStart, found.location - searchStart)]];
+                searchStart = found.location + found.length;
+            }
+        }
+        if ((NSInteger)cellRanges.count > maxCols) {
+            maxCols = (NSInteger)cellRanges.count;
+        }
+        [allRowsCells addObject:cellRanges];
+    }
+
+    NSInteger totalWidth = 9000;
+    NSInteger colWidth = totalWidth / MAX(1, maxCols);
+
+    [xml appendString:@"  <w:tbl>\n"];
+    [xml appendString:@"    <w:tblPr>\n"];
+    [xml appendString:@"      <w:bidiVisual/>\n"];
+    [xml appendFormat:@"      <w:tblW w:w=\"%ld\" w:type=\"dxa\"/>\n", (long)totalWidth];
+    [xml appendString:@"      <w:tblBorders>\n"];
+    [xml appendString:@"        <w:top w:val=\"single\" w:sz=\"6\" w:space=\"0\" w:color=\"444444\"/>\n"];
+    [xml appendString:@"        <w:left w:val=\"single\" w:sz=\"6\" w:space=\"0\" w:color=\"444444\"/>\n"];
+    [xml appendString:@"        <w:bottom w:val=\"single\" w:sz=\"6\" w:space=\"0\" w:color=\"444444\"/>\n"];
+    [xml appendString:@"        <w:right w:val=\"single\" w:sz=\"6\" w:space=\"0\" w:color=\"444444\"/>\n"];
+    [xml appendString:@"        <w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"888888\"/>\n"];
+    [xml appendString:@"        <w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"888888\"/>\n"];
+    [xml appendString:@"      </w:tblBorders>\n"];
+    [xml appendString:@"      <w:tblCellMar>\n"];
+    [xml appendString:@"        <w:top w:w=\"80\" w:type=\"dxa\"/>\n"];
+    [xml appendString:@"        <w:left w:w=\"120\" w:type=\"dxa\"/>\n"];
+    [xml appendString:@"        <w:bottom w:w=\"80\" w:type=\"dxa\"/>\n"];
+    [xml appendString:@"        <w:right w:w=\"120\" w:type=\"dxa\"/>\n"];
+    [xml appendString:@"      </w:tblCellMar>\n"];
+    [xml appendString:@"    </w:tblPr>\n"];
+
+    [xml appendString:@"    <w:tblGrid>\n"];
+    for (NSInteger c = 0; c < maxCols; c++) {
+        [xml appendFormat:@"      <w:gridCol w:w=\"%ld\"/>\n", (long)colWidth];
+    }
+    [xml appendString:@"    </w:tblGrid>\n"];
+
+    for (NSUInteger r = 0; r < allRowsCells.count; r++) {
+        NSArray<NSValue *> *cells = allRowsCells[r];
+        BOOL isHeader = (r == 0);
+        [xml appendString:@"    <w:tr>\n"];
+        if (isHeader) {
+            [xml appendString:@"      <w:trPr><w:tblHeader/></w:trPr>\n"];
+        }
+        for (NSInteger c = 0; c < maxCols; c++) {
+            [xml appendString:@"      <w:tc>\n        <w:tcPr>"];
+            [xml appendFormat:@"<w:tcW w:w=\"%ld\" w:type=\"dxa\"/>", (long)colWidth];
+            if (isHeader) {
+                [xml appendString:@"<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"E8EEF5\"/>"];
+            }
+            [xml appendString:@"</w:tcPr>\n"];
+            [xml appendString:@"        <w:p><w:pPr><w:bidi/><w:jc w:val=\"right\"/></w:pPr>\n"];
+            if (c < (NSInteger)cells.count) {
+                NSRange cRange = [cells[c] rangeValue];
+                [self appendFormattedRunsFromAttributedString:attrStr inRange:cRange isRTL:YES trimPadding:YES toXML:xml];
+            }
+            [xml appendString:@"        </w:p>\n      </w:tc>\n"];
+        }
+        [xml appendString:@"    </w:tr>\n"];
+    }
+
+    [xml appendString:@"  </w:tbl>\n"];
+}
+
 + (NSData *)deflateRaw:(NSData *)rawData {
     if (rawData.length == 0) return [NSData data];
     z_stream strm;
@@ -535,10 +694,22 @@ static void zero_mem(void *ptr, size_t len) {
     NSString *fullText = attrStr.string ?: @"";
     NSArray<NSString *> *lines = [fullText componentsSeparatedByString:@"\n"];
     NSUInteger location = 0;
+    NSMutableArray<NSValue *> *pendingTableRows = [NSMutableArray array];
 
     for (NSUInteger i = 0; i < lines.count; i++) {
         NSString *line = lines[i];
         NSRange lineRange = NSMakeRange(location, line.length);
+
+        if ([self isTableLine:line]) {
+            [pendingTableRows addObject:[NSValue valueWithRange:lineRange]];
+            location += line.length + 1;
+            continue;
+        }
+
+        if (pendingTableRows.count > 0) {
+            [self appendTableFromAttributedString:attrStr rowRanges:pendingTableRows toXML:xml];
+            [pendingTableRows removeAllObjects];
+        }
 
         NSTextAlignment align = NSTextAlignmentRight;
         BOOL isRTL = YES;
@@ -597,47 +768,17 @@ static void zero_mem(void *ptr, size_t len) {
                     return;
                 }
 
-                NSString *sub = [[fullText substringWithRange:range] stringByReplacingOccurrencesOfString:@"\uFFFC" withString:@""];
-                if (sub.length == 0) return;
-
-                UIFont *font = attrs[NSFontAttributeName];
-                NSNumber *underline = attrs[NSUnderlineStyleAttributeName];
-                UIColor *fgColor = attrs[NSForegroundColorAttributeName];
-
-                BOOL bold = NO;
-                BOOL italic = NO;
-                CGFloat size = 18.0;
-                NSString *exportFont = @"Arial";
-                if (font) {
-                    size = font.pointSize;
-                    NSString *fn = font.fontName;
-                    if ([fn rangeOfString:@"Geeza" options:NSCaseInsensitiveSearch].location != NSNotFound) exportFont = @"Geeza Pro";
-                    else if ([fn rangeOfString:@"Damascus" options:NSCaseInsensitiveSearch].location != NSNotFound) exportFont = @"Damascus";
-                    else if ([fn rangeOfString:@"Baghdad" options:NSCaseInsensitiveSearch].location != NSNotFound) exportFont = @"Baghdad";
-
-                    UIFontDescriptorSymbolicTraits traits = font.fontDescriptor.symbolicTraits;
-                    bold = (traits & UIFontDescriptorTraitBold) != 0 || ([fn rangeOfString:@"Bold" options:NSCaseInsensitiveSearch].location != NSNotFound);
-                    italic = (traits & UIFontDescriptorTraitItalic) != 0 || ([fn rangeOfString:@"Italic" options:NSCaseInsensitiveSearch].location != NSNotFound);
-                }
-                BOOL under = (underline && underline.integerValue != NSUnderlineStyleNone);
-                NSInteger halfPts = (NSInteger)(size * 2.0 + 0.5);
-                NSString *hexColor = [self hexStringFromColor:fgColor];
-
-                [xml appendString:@"    <w:r>\n      <w:rPr>"];
-                [xml appendFormat:@"<w:rFonts w:ascii=\"%@\" w:hAnsi=\"%@\" w:cs=\"%@\"/>", exportFont, exportFont, exportFont];
-                if (isRTL) [xml appendString:@"<w:rtl/>"];
-                if (bold) [xml appendString:@"<w:b/>"];
-                if (italic) [xml appendString:@"<w:i/>"];
-                if (under) [xml appendString:@"<w:u w:val=\"single\"/>"];
-                if (hexColor) [xml appendFormat:@"<w:color w:val=\"%@\"/>", hexColor];
-                [xml appendFormat:@"<w:sz w:val=\"%ld\"/><w:szCs w:val=\"%ld\"/>", (long)halfPts, (long)halfPts];
-                [xml appendString:@"</w:rPr>\n"];
-                [xml appendFormat:@"      <w:t xml:space=\"preserve\">%@</w:t>\n    </w:r>\n", [self escapeXML:sub]];
+                [self appendFormattedRunsFromAttributedString:attrStr inRange:range isRTL:isRTL trimPadding:NO toXML:xml];
             }];
         }
 
         [xml appendString:@"  </w:p>\n"];
         location += line.length + 1;
+    }
+
+    if (pendingTableRows.count > 0) {
+        [self appendTableFromAttributedString:attrStr rowRanges:pendingTableRows toXML:xml];
+        [pendingTableRows removeAllObjects];
     }
 
     [xml appendString:@"</w:body>\n</w:document>\n"];
