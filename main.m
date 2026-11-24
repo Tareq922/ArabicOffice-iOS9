@@ -1,9 +1,12 @@
 #import <UIKit/UIKit.h>
+#import "DocxHelper.h"
 
 @interface EditorViewController : UIViewController <UITextViewDelegate>
 @property (nonatomic, strong) UITextView *textView;
-@property (nonatomic, strong) NSString *currentFileName;
-- (void)loadDocumentFromURL:(NSURL *)url;
+@property (nonatomic, strong) NSURL *currentFileURL;
+@property (nonatomic, strong) UIBarButtonItem *saveShareItem;
+@property (nonatomic, strong) UIBarButtonItem *openItem;
+- (void)openDocumentAtURL:(NSURL *)url;
 @end
 
 @implementation EditorViewController
@@ -11,205 +14,238 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor whiteColor];
-    self.currentFileName = @"مستند_جديد.rtf";
-    self.title = self.currentFileName;
+    self.title = @"مستند_جديد.docx";
 
-    // أزرار الشريط العلوي
-    UIBarButtonItem *newBtn = [[UIBarButtonItem alloc] initWithTitle:@"جديد" style:UIBarButtonItemStylePlain target:self action:@selector(newDocument)];
-    UIBarButtonItem *openBtn = [[UIBarButtonItem alloc] initWithTitle:@"فتح" style:UIBarButtonItemStylePlain target:self action:@selector(openDocumentList:)];
-    self.navigationItem.leftBarButtonItems = @[newBtn, openBtn];
+    UIBarButtonItem *newItem = [[UIBarButtonItem alloc] initWithTitle:@"جديد" style:UIBarButtonItemStylePlain target:self action:@selector(newDoc)];
+    self.openItem = [[UIBarButtonItem alloc] initWithTitle:@"فتح" style:UIBarButtonItemStylePlain target:self action:@selector(openDocList)];
+    self.navigationItem.leftBarButtonItems = @[self.openItem, newItem];
 
-    UIBarButtonItem *exportBtn = [[UIBarButtonItem alloc] initWithTitle:@"حفظ ومشاركة" style:UIBarButtonItemStyleDone target:self action:@selector(saveAndShare:)];
-    UIBarButtonItem *rtlBtn = [[UIBarButtonItem alloc] initWithTitle:@"ضبط عربي RTL" style:UIBarButtonItemStylePlain target:self action:@selector(applyArabicRTL)];
-    self.navigationItem.rightBarButtonItems = @[exportBtn, rtlBtn];
+    UIBarButtonItem *rtlItem = [[UIBarButtonItem alloc] initWithTitle:@"ضبط عربي RTL" style:UIBarButtonItemStylePlain target:self action:@selector(applyRTL)];
+    self.saveShareItem = [[UIBarButtonItem alloc] initWithTitle:@"حفظ ومشاركة" style:UIBarButtonItemStyleDone target:self action:@selector(saveAndShare)];
+    self.navigationItem.rightBarButtonItems = @[rtlItem, self.saveShareItem];
 
-    // محرر النصوص الرئيسي
     self.textView = [[UITextView alloc] initWithFrame:self.view.bounds];
     self.textView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.textView.font = [UIFont systemFontOfSize:18.0];
-    self.textView.textAlignment = NSTextAlignmentRight;
-    self.textView.allowsEditingTextAttributes = YES;
-    self.textView.alwaysBounceVertical = YES;
-    self.textView.textContainerInset = UIEdgeInsetsMake(20, 20, 20, 20);
+    self.textView.backgroundColor = [UIColor whiteColor];
+    self.textView.textContainerInset = UIEdgeInsetsMake(20, 24, 20, 24);
     self.textView.delegate = self;
 
-    // شريط أدوات التنسيق فوق لوحة المفاتيح
-    UIToolbar *toolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
-    UIBarButtonItem *boldBtn = [[UIBarButtonItem alloc] initWithTitle:@"عريض B" style:UIBarButtonItemStylePlain target:self action:@selector(toggleBold)];
-    UIBarButtonItem *italicBtn = [[UIBarButtonItem alloc] initWithTitle:@"مائل I" style:UIBarButtonItemStylePlain target:self action:@selector(toggleItalic)];
-    UIBarButtonItem *underBtn = [[UIBarButtonItem alloc] initWithTitle:@"تسطير U" style:UIBarButtonItemStylePlain target:self action:@selector(toggleUnderline)];
-    UIBarButtonItem *incFont = [[UIBarButtonItem alloc] initWithTitle:@"خط +" style:UIBarButtonItemStylePlain target:self action:@selector(increaseFont)];
-    UIBarButtonItem *decFont = [[UIBarButtonItem alloc] initWithTitle:@"خط -" style:UIBarButtonItemStylePlain target:self action:@selector(decreaseFont)];
-    UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-    UIBarButtonItem *hideKb = [[UIBarButtonItem alloc] initWithTitle:@"إخفاء الكيبورد" style:UIBarButtonItemStyleDone target:self action:@selector(dismissKeyboard)];
-
-    toolbar.items = @[boldBtn, italicBtn, underBtn, incFont, decFont, flex, hideKb];
-    self.textView.inputAccessoryView = toolbar;
-
+    [self setupFormattingToolbar];
     [self.view addSubview:self.textView];
-    [self applyArabicRTL];
 
-    // مراقبة لوحة المفاتيح لتجنب تغطية النص
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillShow:) name:UIKeyboardWillShowNotification object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillHide:) name:UIKeyboardWillHideNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardChanged:) name:UIKeyboardWillChangeFrameNotification object:nil];
+
+    [self newDoc];
 }
 
-- (void)keyboardWillShow:(NSNotification *)note {
+- (void)setupFormattingToolbar {
+    UIToolbar *toolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
+    UIBarButtonItem *hideKB = [[UIBarButtonItem alloc] initWithTitle:@"إخفاء الكيبورد" style:UIBarButtonItemStylePlain target:self.textView action:@selector(resignFirstResponder)];
+    UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+    UIBarButtonItem *fontMinus = [[UIBarButtonItem alloc] initWithTitle:@"خط -" style:UIBarButtonItemStylePlain target:self action:@selector(decreaseFont)];
+    UIBarButtonItem *fontPlus = [[UIBarButtonItem alloc] initWithTitle:@"خط +" style:UIBarButtonItemStylePlain target:self action:@selector(increaseFont)];
+    UIBarButtonItem *underline = [[UIBarButtonItem alloc] initWithTitle:@"تسطير U" style:UIBarButtonItemStylePlain target:self action:@selector(toggleUnderline)];
+    UIBarButtonItem *italic = [[UIBarButtonItem alloc] initWithTitle:@"مائل I" style:UIBarButtonItemStylePlain target:self action:@selector(toggleItalic)];
+    UIBarButtonItem *bold = [[UIBarButtonItem alloc] initWithTitle:@"عريض B" style:UIBarButtonItemStyleDone target:self action:@selector(toggleBold)];
+
+    toolbar.items = @[hideKB, flex, fontMinus, fontPlus, underline, italic, bold];
+    self.textView.inputAccessoryView = toolbar;
+}
+
+- (void)keyboardChanged:(NSNotification *)note {
     CGRect kbFrame = [note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    CGRect localFrame = [self.view convertRect:kbFrame fromView:nil];
+    CGFloat bottomInset = MAX(0, self.view.bounds.size.height - localFrame.origin.y);
     UIEdgeInsets insets = self.textView.contentInset;
-    insets.bottom = kbFrame.size.height + 10;
+    insets.bottom = bottomInset;
     self.textView.contentInset = insets;
     self.textView.scrollIndicatorInsets = insets;
 }
 
-- (void)keyboardWillHide:(NSNotification *)note {
-    UIEdgeInsets insets = self.textView.contentInset;
-    insets.bottom = 0;
-    self.textView.contentInset = insets;
-    self.textView.scrollIndicatorInsets = insets;
+- (NSDictionary *)defaultArabicAttributes {
+    NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
+    para.alignment = NSTextAlignmentRight;
+    para.baseWritingDirection = NSWritingDirectionRightToLeft;
+    UIFont *font = [UIFont fontWithName:@"ArialMT" size:19.0] ?: [UIFont systemFontOfSize:19.0];
+    return @{
+        NSFontAttributeName: font,
+        NSParagraphStyleAttributeName: para,
+        NSForegroundColorAttributeName: [UIColor blackColor]
+    };
 }
 
-- (void)dismissKeyboard {
-    [self.textView resignFirstResponder];
+- (void)newDoc {
+    self.currentFileURL = nil;
+    self.title = @"مستند_جديد.docx";
+    self.textView.typingAttributes = [self defaultArabicAttributes];
+    self.textView.attributedText = [[NSAttributedString alloc] initWithString:@"بسم الله الرحمن الرحيم\n" attributes:[self defaultArabicAttributes]];
 }
 
-- (void)newDocument {
-    self.textView.text = @"";
-    self.currentFileName = @"مستند_جديد.rtf";
-    self.title = self.currentFileName;
-    [self applyArabicRTL];
+- (void)applyRTL {
+    NSMutableAttributedString *attr = [self.textView.attributedText mutableCopy];
+    NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
+    para.alignment = NSTextAlignmentRight;
+    para.baseWritingDirection = NSWritingDirectionRightToLeft;
+    [attr addAttribute:NSParagraphStyleAttributeName value:para range:NSMakeRange(0, attr.length)];
+    self.textView.attributedText = attr;
+    self.textView.typingAttributes = [self defaultArabicAttributes];
 }
 
-- (void)applyArabicRTL {
-    NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
-    style.alignment = NSTextAlignmentRight;
-    style.baseWritingDirection = NSWritingDirectionRightToLeft;
-
-    NSMutableDictionary *typingAttrs = [self.textView.typingAttributes mutableCopy];
-    typingAttrs[NSParagraphStyleAttributeName] = style;
-    if (!typingAttrs[NSFontAttributeName]) {
-        typingAttrs[NSFontAttributeName] = [UIFont systemFontOfSize:18.0];
-    }
-    self.textView.typingAttributes = typingAttrs;
-
-    if (self.textView.attributedText.length > 0) {
-        NSMutableAttributedString *attrStr = [self.textView.attributedText mutableCopy];
-        NSRange range = self.textView.selectedRange.length > 0 ? self.textView.selectedRange : NSMakeRange(0, attrStr.length);
-        [attrStr addAttribute:NSParagraphStyleAttributeName value:style range:range];
-        self.textView.attributedText = attrStr;
-    }
-}
-
-- (void)toggleTrait:(UIFontDescriptorSymbolicTraits)trait {
+- (void)modifySelectedFontWithBold:(BOOL)toggleBold italic:(BOOL)toggleItalic sizeDelta:(CGFloat)delta {
     NSRange range = self.textView.selectedRange;
     if (range.length == 0) return;
 
-    NSMutableAttributedString *attrStr = [self.textView.attributedText mutableCopy];
-    [attrStr enumerateAttribute:NSFontAttributeName inRange:range options:0 usingBlock:^(UIFont *font, NSRange subRange, BOOL *stop) {
-        if (!font) font = [UIFont systemFontOfSize:18.0];
-        UIFontDescriptorSymbolicTraits existing = font.fontDescriptor.symbolicTraits;
-        UIFontDescriptorSymbolicTraits updated = (existing & trait) ? (existing & ~trait) : (existing | trait);
-        UIFontDescriptor *desc = [font.fontDescriptor fontDescriptorWithSymbolicTraits:updated];
-        if (desc) {
-            UIFont *newFont = [UIFont fontWithDescriptor:desc size:font.pointSize];
-            [attrStr addAttribute:NSFontAttributeName value:newFont range:subRange];
-        }
+    NSMutableAttributedString *attr = [self.textView.attributedText mutableCopy];
+    [attr enumerateAttribute:NSFontAttributeName inRange:range options:0 usingBlock:^(UIFont *font, NSRange subRange, BOOL *stop) {
+        UIFont *base = font ?: ([UIFont fontWithName:@"ArialMT" size:19.0] ?: [UIFont systemFontOfSize:19.0]);
+        CGFloat size = MAX(12.0, MIN(48.0, base.pointSize + delta));
+        BOOL isB = ([base.fontName rangeOfString:@"Bold" options:NSCaseInsensitiveSearch].location != NSNotFound);
+        BOOL isI = ([base.fontName rangeOfString:@"Italic" options:NSCaseInsensitiveSearch].location != NSNotFound);
+        if (toggleBold) isB = !isB;
+        if (toggleItalic) isI = !isI;
+
+        NSString *name = @"ArialMT";
+        if (isB && isI) name = @"Arial-BoldItalicMT";
+        else if (isB) name = @"Arial-BoldMT";
+        else if (isI) name = @"Arial-ItalicMT";
+
+        UIFont *newFont = [UIFont fontWithName:name size:size] ?: (isB ? [UIFont boldSystemFontOfSize:size] : [UIFont systemFontOfSize:size]);
+        [attr addAttribute:NSFontAttributeName value:newFont range:subRange];
     }];
-    self.textView.attributedText = attrStr;
+    self.textView.attributedText = attr;
     self.textView.selectedRange = range;
 }
 
-- (void)toggleBold { [self toggleTrait:UIFontDescriptorTraitBold]; }
-- (void)toggleItalic { [self toggleTrait:UIFontDescriptorTraitItalic]; }
+- (void)toggleBold { [self modifySelectedFontWithBold:YES italic:NO sizeDelta:0]; }
+- (void)toggleItalic { [self modifySelectedFontWithBold:NO italic:YES sizeDelta:0]; }
+- (void)increaseFont { [self modifySelectedFontWithBold:NO italic:NO sizeDelta:2.0]; }
+- (void)decreaseFont { [self modifySelectedFontWithBold:NO italic:NO sizeDelta:-2.0]; }
 
 - (void)toggleUnderline {
     NSRange range = self.textView.selectedRange;
     if (range.length == 0) return;
-    NSMutableAttributedString *attrStr = [self.textView.attributedText mutableCopy];
-    NSNumber *current = [attrStr attribute:NSUnderlineStyleAttributeName atIndex:range.location effectiveRange:nil];
-    NSNumber *next = (current && current.integerValue > 0) ? @(NSUnderlineStyleNone) : @(NSUnderlineStyleSingle);
-    [attrStr addAttribute:NSUnderlineStyleAttributeName value:next range:range];
-    self.textView.attributedText = attrStr;
+    NSMutableAttributedString *attr = [self.textView.attributedText mutableCopy];
+    NSNumber *cur = [attr attribute:NSUnderlineStyleAttributeName atIndex:range.location effectiveRange:NULL];
+    NSInteger next = (cur && cur.integerValue != NSUnderlineStyleNone) ? NSUnderlineStyleNone : NSUnderlineStyleSingle;
+    [attr addAttribute:NSUnderlineStyleAttributeName value:@(next) range:range];
+    self.textView.attributedText = attr;
     self.textView.selectedRange = range;
 }
 
-- (void)changeFontSizeBy:(CGFloat)delta {
-    NSRange range = self.textView.selectedRange.length > 0 ? self.textView.selectedRange : NSMakeRange(0, self.textView.attributedText.length);
-    if (range.length == 0) return;
-    NSMutableAttributedString *attrStr = [self.textView.attributedText mutableCopy];
-    [attrStr enumerateAttribute:NSFontAttributeName inRange:range options:0 usingBlock:^(UIFont *font, NSRange subRange, BOOL *stop) {
-        if (!font) font = [UIFont systemFontOfSize:18.0];
-        CGFloat newSize = MAX(12.0, MIN(48.0, font.pointSize + delta));
-        UIFont *newFont = [font fontWithSize:newSize];
-        [attrStr addAttribute:NSFontAttributeName value:newFont range:subRange];
-    }];
-    self.textView.attributedText = attrStr;
-    self.textView.selectedRange = range;
+- (NSURL *)documentsDirectoryURL {
+    return [[[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
 }
 
-- (void)increaseFont { [self changeFontSizeBy:2.0]; }
-- (void)decreaseFont { [self changeFontSizeBy:-2.0]; }
+- (void)saveAndShare {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"حفظ ومشاركة المستند" message:@"اختر صيغة الملف المطلوبة:" preferredStyle:UIAlertControllerStyleActionSheet];
 
-- (NSString *)documentsDirectory {
-    return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-}
+    [sheet addAction:[UIAlertAction actionWithTitle:@"ملف Word (.docx)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self promptFilenameAndSaveWithExtension:@"docx"];
+    }]];
 
-- (void)loadDocumentFromURL:(NSURL *)url {
-    if (!url) return;
-    NSError *error = nil;
-    NSDictionary *options = @{};
-    NSAttributedString *doc = [[NSAttributedString alloc] initWithURL:url options:options documentAttributes:nil error:&error];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"مستند منسق (.rtf)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self promptFilenameAndSaveWithExtension:@"rtf"];
+    }]];
 
-    if (doc) {
-        self.textView.attributedText = doc;
-        NSString *baseName = [[url.lastPathComponent stringByDeletingPathExtension] stringByAppendingString:@"_معدل.rtf"];
-        self.currentFileName = baseName;
-        self.title = self.currentFileName;
-    } else {
-        NSString *plain = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:nil];
-        if (plain) {
-            self.textView.text = plain;
-            [self applyArabicRTL];
-        } else {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"تعذر فتح الملف" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"موافق" style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:alert animated:YES completion:nil];
-        }
-    }
-}
+    [sheet addAction:[UIAlertAction actionWithTitle:@"نص عادي (.txt)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self promptFilenameAndSaveWithExtension:@"txt"];
+    }]];
 
-- (void)openDocumentList:(UIBarButtonItem *)sender {
-    NSString *docsDir = [self documentsDirectory];
-    NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:docsDir error:nil];
-
-    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"المستندات المحفوظة" message:@"اختر ملفاً لفتحه وتعديله" preferredStyle:UIAlertControllerStyleActionSheet];
-    for (NSString *file in files) {
-        if ([file isEqualToString:@"Inbox"]) continue;
-        [sheet addAction:[UIAlertAction actionWithTitle:file style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            NSURL *fileURL = [NSURL fileURLWithPath:[docsDir stringByAppendingPathComponent:file]];
-            [self loadDocumentFromURL:fileURL];
-        }]];
-    }
     [sheet addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
-    sheet.popoverPresentationController.barButtonItem = sender;
+
+    sheet.popoverPresentationController.barButtonItem = self.saveShareItem;
     [self presentViewController:sheet animated:YES completion:nil];
 }
 
-- (void)saveAndShare:(UIBarButtonItem *)sender {
-    NSString *docsDir = [self documentsDirectory];
-    NSString *savePath = [docsDir stringByAppendingPathComponent:self.currentFileName];
-    NSURL *saveURL = [NSURL fileURLWithPath:savePath];
+- (void)promptFilenameAndSaveWithExtension:(NSString *)ext {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"اسم الملف" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.textAlignment = NSTextAlignmentRight;
+        NSString *base = self.currentFileURL ? [[self.currentFileURL lastPathComponent] stringByDeletingPathExtension] : @"مستند_عربي";
+        tf.text = base;
+    }];
 
-    NSRange fullRange = NSMakeRange(0, self.textView.attributedText.length);
-    NSDictionary *attrs = @{NSDocumentTypeDocumentAttribute: NSRTFTextDocumentType};
-    NSData *rtfData = [self.textView.attributedText dataFromRange:fullRange documentAttributes:attrs error:nil];
+    [alert addAction:[UIAlertAction actionWithTitle:@"حفظ ومشاركة" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *name = alert.textFields.firstObject.text;
+        if (name.length == 0) name = @"مستند_عربي";
+        NSString *fullName = [NSString stringWithFormat:@"%@.%@", name, ext];
+        NSURL *destURL = [[self documentsDirectoryURL] URLByAppendingPathComponent:fullName];
 
-    if (rtfData) {
-        [rtfData writeToURL:saveURL atomically:YES];
-        UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[saveURL] applicationActivities:nil];
-        activity.popoverPresentationController.barButtonItem = sender;
-        [self presentViewController:activity animated:YES completion:nil];
+        NSError *err = nil;
+        BOOL ok = NO;
+        if ([ext isEqualToString:@"docx"]) {
+            ok = [DocxHelper writeAttributedString:self.textView.attributedText toDocxURL:destURL error:&err];
+        } else if ([ext isEqualToString:@"rtf"]) {
+            NSData *rtfData = [self.textView.attributedText dataFromRange:NSMakeRange(0, self.textView.attributedText.length) documentAttributes:@{NSDocumentTypeDocumentAttribute: NSRTFTextDocumentType} error:&err];
+            if (rtfData) ok = [rtfData writeToURL:destURL options:NSDataWritingAtomic error:&err];
+        } else {
+            ok = [self.textView.text writeToURL:destURL atomically:YES encoding:NSUTF8StringEncoding error:&err];
+        }
+
+        if (ok) {
+            self.currentFileURL = destURL;
+            self.title = fullName;
+            UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[destURL] applicationActivities:nil];
+            activity.popoverPresentationController.barButtonItem = self.saveShareItem;
+            [self presentViewController:activity animated:YES completion:nil];
+        } else {
+            [self showMessage:@"خطأ في الحفظ" body:err.localizedDescription ?: @"فشل حفظ الملف"];
+        }
+    }]];
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)openDocList {
+    NSURL *docsURL = [self documentsDirectoryURL];
+    NSArray<NSURL *> *files = [[NSFileManager defaultManager] contentsOfDirectoryAtURL:docsURL includingPropertiesForKeys:nil options:NSDirectoryEnumerationSkipsHiddenFiles error:nil];
+
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"الملفات المحفوظة" message:@"يمكنك أيضاً فتح أي ملف .docx من Filza أو البريد باختيار ArabicOffice" preferredStyle:UIAlertControllerStyleActionSheet];
+
+    for (NSURL *fileURL in files) {
+        NSString *ext = fileURL.pathExtension.lowercaseString;
+        if ([ext isEqualToString:@"docx"] || [ext isEqualToString:@"rtf"] || [ext isEqualToString:@"txt"]) {
+            [sheet addAction:[UIAlertAction actionWithTitle:fileURL.lastPathComponent style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                [self openDocumentAtURL:fileURL];
+            }]];
+        }
     }
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"إغلاق" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.barButtonItem = self.openItem;
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)openDocumentAtURL:(NSURL *)url {
+    NSString *ext = url.pathExtension.lowercaseString;
+    NSError *err = nil;
+    NSAttributedString *loaded = nil;
+
+    if ([ext isEqualToString:@"docx"]) {
+        loaded = [DocxHelper attributedStringFromDocxURL:url error:&err];
+    } else if ([ext isEqualToString:@"rtf"]) {
+        loaded = [[NSAttributedString alloc] initWithURL:url options:@{NSDocumentTypeDocumentAttribute: NSRTFTextDocumentType} documentAttributes:nil error:&err];
+    } else {
+        NSString *txt = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:&err];
+        if (txt) {
+            loaded = [[NSAttributedString alloc] initWithString:txt attributes:[self defaultArabicAttributes]];
+        }
+    }
+
+    if (loaded) {
+        self.textView.attributedText = loaded;
+        self.currentFileURL = url;
+        self.title = url.lastPathComponent;
+    } else {
+        [self showMessage:@"تعذر فتح الملف" body:err.localizedDescription ?: @"صيغة الملف غير مدعومة"];
+    }
+}
+
+- (void)showMessage:(NSString *)title body:(NSString *)body {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:body preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"موافق" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 @end
@@ -230,14 +266,19 @@
     return YES;
 }
 
-- (BOOL)application:(UIApplication *)app openURL:(NSURL *)url options:(NSDictionary<NSString *, id> *)options {
-    [self.editorVC loadDocumentFromURL:url];
-    return YES;
+- (BOOL)application:(UIApplication *)app openURL:(NSURL *)url options:(NSDictionary<NSString *,id> *)options {
+    if (url.isFileURL) {
+        NSURL *dest = [[self.editorVC documentsDirectoryURL] URLByAppendingPathComponent:url.lastPathComponent];
+        [[NSFileManager defaultManager] removeItemAtURL:dest error:nil];
+        [[NSFileManager defaultManager] copyItemAtURL:url toURL:dest error:nil];
+        [self.editorVC openDocumentAtURL:dest];
+        return YES;
+    }
+    return NO;
 }
 
 - (BOOL)application:(UIApplication *)application openURL:(NSURL *)url sourceApplication:(NSString *)sourceApplication annotation:(id)annotation {
-    [self.editorVC loadDocumentFromURL:url];
-    return YES;
+    return [self application:application openURL:url options:@{}];
 }
 
 @end
