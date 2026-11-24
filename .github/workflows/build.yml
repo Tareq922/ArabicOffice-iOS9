@@ -151,7 +151,7 @@ jobs:
           make stage DEBUG=0 \
             TARGET_CC="$HOME/theos/toolchain/linux/iphone/bin/clang" \
             TARGET_CXX="$HOME/theos/toolchain/linux/iphone/bin/clang++" \
-            TARGET_LD="$HOME/theos/toolchain/linux/iphone/bin/ld" \
+            TARGET_LD="$HOME/theos/toolchain/linux/iphone/bin/clang++" \
             TARGET_STRIP="$HOME/theos/toolchain/linux/iphone/bin/strip"
           mkdir -p build/Payload
           cp -r .theos/_/Applications/*.app build/Payload/
