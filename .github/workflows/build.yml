@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:22.04
+      image: ubuntu:24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -17,7 +17,7 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates clang g++ llvm-dev uuid-dev libssl-dev libplist-dev zlib1g-dev libblocksruntime-dev libdispatch-dev libxar-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates clang g++ llvm-dev uuid-dev libssl-dev libplist-dev zlib1g-dev libblocksruntime-dev libxar-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
 
       - name: Build ldid and cctools (armv7)
         run: |
@@ -27,7 +27,8 @@ jobs:
 
           git clone --depth=1 https://github.com/tpoechtrager/cctools-port.git /tmp/cctools
           cd /tmp/cctools/cctools
-          CC=clang CXX=clang++ ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
+          BLOCK_H_DIR=$(dirname $(find /usr/include -name "Block.h" 2>/dev/null | head -n 1))
+          CC=clang CXX=clang++ CPPFLAGS="-I${BLOCK_H_DIR}" CFLAGS="-Wno-error -std=gnu17 -I${BLOCK_H_DIR}" CXXFLAGS="-Wno-error -std=gnu++14 -I${BLOCK_H_DIR}" ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
           make -j$(nproc)
           make install
 
@@ -126,6 +127,7 @@ jobs:
           CLANG_RES_DIR=$(/usr/bin/clang -print-resource-dir)
           mkdir -p "$CLANG_RES_DIR/lib/darwin"
           /usr/local/bin/arm-apple-darwin11-ar rcs "$CLANG_RES_DIR/lib/darwin/libclang_rt.ios.a" /tmp/dummy.o
+          cp "$CLANG_RES_DIR/lib/darwin/libclang_rt.ios.a" "$CLANG_RES_DIR/lib/darwin/libclang_rt.ios_armv7.a"
 
       - name: Compile and Package IPA (armv7)
         run: |
