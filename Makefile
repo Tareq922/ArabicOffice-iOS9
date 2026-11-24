@@ -1,11 +1,12 @@
-ARCHS = armv7
-TARGET = iphone:clang:9.3:9.0
+TARGET := iphone:clang:latest:9.0
+ARCHS := armv7
+INSTALL_TARGET_PROCESSES := ArabicOffice
 
 include $(THEOS)/makefiles/common.mk
 
 APPLICATION_NAME = ArabicOffice
-ArabicOffice_FILES = main.m
+ArabicOffice_FILES = main.m DocxHelper.m
 ArabicOffice_FRAMEWORKS = UIKit Foundation CoreGraphics CoreText
-ArabicOffice_CFLAGS = -fobjc-arc
+ArabicOffice_LIBRARIES = z
 
 include $(THEOS_MAKE_PATH)/application.mk
