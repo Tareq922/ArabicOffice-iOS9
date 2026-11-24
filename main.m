@@ -6,6 +6,7 @@
 @property (nonatomic, strong) NSURL *currentFileURL;
 @property (nonatomic, strong) UIBarButtonItem *saveShareItem;
 @property (nonatomic, strong) UIBarButtonItem *openItem;
+@property (nonatomic, strong) UIBarButtonItem *tableItem;
 @property (nonatomic, strong) UIBarButtonItem *fontItem;
 @property (nonatomic, strong) UIBarButtonItem *colorItem;
 @property (nonatomic, strong) UIBarButtonItem *listItem;
@@ -87,6 +88,7 @@
     UIToolbar *toolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
     UIBarButtonItem *hideKB = [[UIBarButtonItem alloc] initWithTitle:@"إخفاء" style:UIBarButtonItemStylePlain target:self.textView action:@selector(resignFirstResponder)];
     UIBarButtonItem *insertImg = [[UIBarButtonItem alloc] initWithTitle:@"صورة" style:UIBarButtonItemStylePlain target:self action:@selector(pickImage)];
+    self.tableItem = [[UIBarButtonItem alloc] initWithTitle:@"جدول" style:UIBarButtonItemStylePlain target:self action:@selector(chooseTableAction)];
     self.fontItem = [[UIBarButtonItem alloc] initWithTitle:@"الخط" style:UIBarButtonItemStylePlain target:self action:@selector(chooseFont)];
     self.colorItem = [[UIBarButtonItem alloc] initWithTitle:@"اللون" style:UIBarButtonItemStylePlain target:self action:@selector(chooseColor)];
     self.listItem = [[UIBarButtonItem alloc] initWithTitle:@"قائمة" style:UIBarButtonItemStylePlain target:self action:@selector(chooseList)];
@@ -100,9 +102,257 @@
     UIBarButtonItem *italic = [[UIBarButtonItem alloc] initWithTitle:@"I" style:UIBarButtonItemStylePlain target:self action:@selector(toggleItalic)];
     UIBarButtonItem *bold = [[UIBarButtonItem alloc] initWithTitle:@"B" style:UIBarButtonItemStyleDone target:self action:@selector(toggleBold)];
 
-    toolbar.items = @[hideKB, insertImg, self.fontItem, self.colorItem, self.listItem, alignR, alignC, alignL, flex, fontMinus, fontPlus, underline, italic, bold];
+    toolbar.items = @[hideKB, insertImg, self.tableItem, self.fontItem, self.colorItem, self.listItem, alignR, alignC, alignL, flex, fontMinus, fontPlus, underline, italic, bold];
     self.textView.inputAccessoryView = toolbar;
 }
+
+#pragma mark - أدوات الجداول
+
+- (NSAttributedString *)attributedTableRowWithCells:(NSArray<NSString *> *)cells isHeader:(BOOL)isHeader {
+    NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
+    para.alignment = NSTextAlignmentRight;
+    para.baseWritingDirection = NSWritingDirectionRightToLeft;
+    para.lineSpacing = 4.0;
+
+    UIFont *font = [self buildFontWithFamily:self.activeFontFamily size:18.0 bold:isHeader italic:NO];
+    NSMutableDictionary *cellAttrs = [@{
+        NSFontAttributeName: font,
+        NSParagraphStyleAttributeName: para,
+        NSForegroundColorAttributeName: [UIColor blackColor]
+    } mutableCopy];
+
+    if (isHeader) {
+        cellAttrs[NSBackgroundColorAttributeName] = [UIColor colorWithRed:0.91 green:0.94 blue:0.98 alpha:1.0];
+    }
+
+    NSMutableDictionary *sepAttrs = [cellAttrs mutableCopy];
+    sepAttrs[NSForegroundColorAttributeName] = [UIColor colorWithRed:0.25 green:0.45 blue:0.75 alpha:1.0];
+
+    NSMutableAttributedString *row = [[NSMutableAttributedString alloc] init];
+    for (NSUInteger i = 0; i < cells.count; i++) {
+        if (i > 0) {
+            [row appendAttributedString:[[NSAttributedString alloc] initWithString:@" │ " attributes:sepAttrs]];
+        }
+        [row appendAttributedString:[[NSAttributedString alloc] initWithString:cells[i] attributes:cellAttrs]];
+    }
+    return row;
+}
+
+- (void)chooseTableAction {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"أدوات الجداول" message:@"تُحفظ الجداول كجداول Word رسمية (.docx)" preferredStyle:UIAlertControllerStyleActionSheet];
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"إدراج جدول جديد..." style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self promptInsertTable];
+    }]];
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"إضافة صف جديد للجدول" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self addRowToCurrentTable];
+    }]];
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"إضافة عمود للجدول" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self addColumnToCurrentTable];
+    }]];
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"حذف الصف الحالي" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        [self deleteCurrentTableRow];
+    }]];
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
+    sheet.popoverPresentationController.barButtonItem = self.tableItem;
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)promptInsertTable {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"إدراج جدول جديد" message:@"حدد عدد الأعمدة والصفوف:" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.placeholder = @"عدد الأعمدة (مثال: 3)";
+        tf.text = @"3";
+        tf.keyboardType = UIKeyboardTypeNumberPad;
+        tf.textAlignment = NSTextAlignmentCenter;
+    }];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.placeholder = @"عدد الصفوف (مثال: 3)";
+        tf.text = @"3";
+        tf.keyboardType = UIKeyboardTypeNumberPad;
+        tf.textAlignment = NSTextAlignmentCenter;
+    }];
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"إدراج" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSInteger cols = MAX(1, MIN(10, alert.textFields[0].text.integerValue));
+        NSInteger rows = MAX(1, MIN(50, alert.textFields[1].text.integerValue));
+
+        NSMutableAttributedString *tableBlock = [[NSMutableAttributedString alloc] init];
+        NSDictionary *defAttrs = [self defaultArabicAttributes];
+
+        NSTextStorage *storage = self.textView.textStorage;
+        NSRange sel = self.textView.selectedRange;
+        if (sel.location == NSNotFound || sel.location > storage.length) {
+            sel = NSMakeRange(storage.length, 0);
+        }
+
+        if (sel.location > 0 && [storage.string characterAtIndex:sel.location - 1] != '\n') {
+            [tableBlock appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n" attributes:defAttrs]];
+        }
+
+        for (NSInteger r = 0; r < rows; r++) {
+            NSMutableArray<NSString *> *cells = [NSMutableArray arrayWithCapacity:cols];
+            for (NSInteger c = 0; c < cols; c++) {
+                if (r == 0) {
+                    [cells addObject:[NSString stringWithFormat:@"عنوان %ld", (long)(c + 1)]];
+                } else {
+                    [cells addObject:@"بيانات"];
+                }
+            }
+            [tableBlock appendAttributedString:[self attributedTableRowWithCells:cells isHeader:(r == 0)]];
+            [tableBlock appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n" attributes:defAttrs]];
+        }
+
+        [storage beginEditing];
+        [storage replaceCharactersInRange:sel withAttributedString:tableBlock];
+        [storage endEditing];
+        self.textView.selectedRange = NSMakeRange(sel.location + tableBlock.length, 0);
+    }]];
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (NSRange)currentParagraphLineRange {
+    NSTextStorage *storage = self.textView.textStorage;
+    if (storage.length == 0) return NSMakeRange(0, 0);
+    NSRange sel = self.textView.selectedRange;
+    if (sel.location == NSNotFound || sel.location >= storage.length) {
+        sel = NSMakeRange(storage.length - 1, 0);
+    }
+    NSRange paraRange = [storage.string paragraphRangeForRange:sel];
+    while (paraRange.length > 0 && [storage.string characterAtIndex:NSMaxRange(paraRange) - 1] == '\n') {
+        paraRange.length--;
+    }
+    return paraRange;
+}
+
+- (void)addRowToCurrentTable {
+    NSTextStorage *storage = self.textView.textStorage;
+    NSRange lineRange = [self currentParagraphLineRange];
+    if (lineRange.length == 0) {
+        [self showMessage:@"تنبيه" body:@"ضع المؤشر داخل صف من الجدول أولاً لإضافة صف جديد."];
+        return;
+    }
+
+    NSString *lineStr = [storage.string substringWithRange:lineRange];
+    NSString *sep = ([lineStr rangeOfString:@"│"].location != NSNotFound) ? @"│" : (([lineStr rangeOfString:@"|"].location != NSNotFound) ? @"|" : nil);
+    if (!sep) {
+        [self showMessage:@"تنبيه" body:@"السطر الحالي لا يحتوي على جدول. ضع المؤشر داخل الجدول أولاً."];
+        return;
+    }
+
+    NSArray<NSString *> *parts = [lineStr componentsSeparatedByString:sep];
+    NSMutableArray<NSString *> *newCells = [NSMutableArray arrayWithCapacity:parts.count];
+    for (NSUInteger i = 0; i < parts.count; i++) {
+        [newCells addObject:@"بيانات"];
+    }
+
+    NSMutableAttributedString *insertRow = [[NSMutableAttributedString alloc] initWithString:@"\n" attributes:[self defaultArabicAttributes]];
+    [insertRow appendAttributedString:[self attributedTableRowWithCells:newCells isHeader:NO]];
+
+    NSUInteger insertPos = NSMaxRange(lineRange);
+    [storage beginEditing];
+    [storage replaceCharactersInRange:NSMakeRange(insertPos, 0) withAttributedString:insertRow];
+    [storage endEditing];
+    self.textView.selectedRange = NSMakeRange(insertPos + 1, 0);
+}
+
+- (void)addColumnToCurrentTable {
+    NSTextStorage *storage = self.textView.textStorage;
+    NSRange curLine = [self currentParagraphLineRange];
+    if (curLine.length == 0) {
+        [self showMessage:@"تنبيه" body:@"ضع المؤشر داخل الجدول أولاً لإضافة عمود."];
+        return;
+    }
+
+    NSString *full = storage.string;
+    NSString *curStr = [full substringWithRange:curLine];
+    if ([curStr rangeOfString:@"│"].location == NSNotFound && [curStr rangeOfString:@"|"].location == NSNotFound) {
+        [self showMessage:@"تنبيه" body:@"السطر الحالي لا يحتوي على جدول."];
+        return;
+    }
+
+    // تحديد بداية ونهاية كتلة الجدول المتصلة
+    NSUInteger blockStart = curLine.location;
+    while (blockStart > 0) {
+        NSRange prevPara = [full paragraphRangeForRange:NSMakeRange(blockStart - 1, 0)];
+        NSRange prevClean = prevPara;
+        while (prevClean.length > 0 && [full characterAtIndex:NSMaxRange(prevClean) - 1] == '\n') prevClean.length--;
+        NSString *prevStr = [full substringWithRange:prevClean];
+        if ([prevStr rangeOfString:@"│"].location != NSNotFound || [prevStr rangeOfString:@"|"].location != NSNotFound) {
+            blockStart = prevPara.location;
+        } else {
+            break;
+        }
+    }
+
+    NSUInteger blockEnd = NSMaxRange(curLine);
+    while (blockEnd < full.length) {
+        NSUInteger nextStart = blockEnd;
+        if ([full characterAtIndex:nextStart] == '\n') nextStart++;
+        if (nextStart >= full.length) break;
+        NSRange nextPara = [full paragraphRangeForRange:NSMakeRange(nextStart, 0)];
+        NSRange nextClean = nextPara;
+        while (nextClean.length > 0 && [full characterAtIndex:NSMaxRange(nextClean) - 1] == '\n') nextClean.length--;
+        NSString *nextStr = [full substringWithRange:nextClean];
+        if ([nextStr rangeOfString:@"│"].location != NSNotFound || [nextStr rangeOfString:@"|"].location != NSNotFound) {
+            blockEnd = NSMaxRange(nextClean);
+        } else {
+            break;
+        }
+    }
+
+    NSRange tableRange = NSMakeRange(blockStart, blockEnd - blockStart);
+    NSString *tableBlockStr = [full substringWithRange:tableRange];
+    NSArray<NSString *> *rows = [tableBlockStr componentsSeparatedByString:@"\n"];
+
+    NSMutableAttributedString *rebuilt = [[NSMutableAttributedString alloc] init];
+    for (NSUInteger r = 0; r < rows.count; r++) {
+        NSString *rowStr = rows[r];
+        NSString *sep = ([rowStr rangeOfString:@"│"].location != NSNotFound) ? @"│" : @"|";
+        NSArray<NSString *> *rawCells = [rowStr componentsSeparatedByString:sep];
+        NSMutableArray<NSString *> *trimmedCells = [NSMutableArray arrayWithCapacity:rawCells.count + 1];
+        for (NSString *c in rawCells) {
+            [trimmedCells addObject:[c stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]];
+        }
+        [trimmedCells addObject:(r == 0 ? @"عمود جديد" : @"بيانات")];
+
+        if (r > 0) {
+            [rebuilt appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n" attributes:[self defaultArabicAttributes]]];
+        }
+        [rebuilt appendAttributedString:[self attributedTableRowWithCells:trimmedCells isHeader:(r == 0)]];
+    }
+
+    [storage beginEditing];
+    [storage replaceCharactersInRange:tableRange withAttributedString:rebuilt];
+    [storage endEditing];
+}
+
+- (void)deleteCurrentTableRow {
+    NSTextStorage *storage = self.textView.textStorage;
+    if (storage.length == 0) return;
+    NSRange sel = self.textView.selectedRange;
+    if (sel.location == NSNotFound || sel.location >= storage.length) {
+        sel = NSMakeRange(storage.length - 1, 0);
+    }
+    NSRange paraRange = [storage.string paragraphRangeForRange:sel];
+    NSString *lineStr = [storage.string substringWithRange:paraRange];
+    if ([lineStr rangeOfString:@"│"].location == NSNotFound && [lineStr rangeOfString:@"|"].location == NSNotFound) {
+        [self showMessage:@"تنبيه" body:@"السطر الحالي ليس صفاً في جدول."];
+        return;
+    }
+
+    [storage beginEditing];
+    [storage deleteCharactersInRange:paraRange];
+    [storage endEditing];
+}
+
+#pragma mark - الخطوط والألوان والقوائم والمحاذاة
 
 - (UIFont *)buildFontWithFamily:(NSString *)family size:(CGFloat)size bold:(BOOL)isB italic:(BOOL)isI {
     NSString *fam = family ?: self.activeFontFamily ?: @"Arial";
@@ -488,7 +738,7 @@
 - (void)saveAndShare {
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"حفظ ومشاركة المستند" message:@"اختر صيغة الملف المطلوبة:" preferredStyle:UIAlertControllerStyleActionSheet];
 
-    [sheet addAction:[UIAlertAction actionWithTitle:@"ملف Word مع الصور (.docx)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    [sheet addAction:[UIAlertAction actionWithTitle:@"ملف Word مع الجداول والصور (.docx)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         [self promptFilenameAndSaveWithExtension:@"docx"];
     }]];
 
