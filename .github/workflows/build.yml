@@ -17,10 +17,12 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates clang g++ llvm-dev uuid-dev libssl-dev libplist-dev zlib1g-dev libxml2-dev libblocksruntime-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates clang g++ cmake llvm-dev uuid-dev libssl-dev libplist-dev zlib1g-dev libxml2-dev libblocksruntime-dev git make autoconf automake libtool pkg-config zip unzip curl perl fakeroot
 
-      - name: Build ldid, xar, and cctools (armv7)
+      - name: Build ldid, xar, libdispatch, and cctools (armv7)
         run: |
+          cp -f /usr/include/BlocksRuntime/*.h /usr/local/include/ 2>/dev/null || true
+
           git clone --depth=1 https://github.com/ProcursusTeam/ldid.git /tmp/ldid
           make -C /tmp/ldid -j$(nproc)
           make -C /tmp/ldid install
@@ -38,10 +40,26 @@ jobs:
           make install
           ldconfig
 
+          git clone --depth=1 https://github.com/tpoechtrager/apple-libdispatch.git /tmp/apple-libdispatch
+          mkdir -p /tmp/apple-libdispatch/build
+          cd /tmp/apple-libdispatch/build
+          CC=clang CXX=clang++ cmake .. \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_C_FLAGS="-Wno-error -fblocks -I/usr/local/include" \
+            -DCMAKE_CXX_FLAGS="-Wno-error -fblocks -I/usr/local/include" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-L/usr/local/lib -lBlocksRuntime"
+          make -j$(nproc)
+          make install
+          ldconfig
+
           git clone --depth=1 https://github.com/tpoechtrager/cctools-port.git /tmp/cctools
           cd /tmp/cctools/cctools
-          BLOCK_H_DIR=$(dirname $(find /usr/include -name "Block.h" 2>/dev/null | head -n 1))
-          CC=clang CXX=clang++ CPPFLAGS="-I/usr/local/include -I${BLOCK_H_DIR}" CFLAGS="-Wno-error -std=gnu17 -I/usr/local/include -I${BLOCK_H_DIR}" CXXFLAGS="-Wno-error -std=gnu++14 -I/usr/local/include -I${BLOCK_H_DIR}" LDFLAGS="-L/usr/local/lib" ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
+          CC=clang CXX=clang++ \
+            CPPFLAGS="-I/usr/local/include" \
+            CFLAGS="-Wno-error -std=gnu17 -I/usr/local/include" \
+            CXXFLAGS="-Wno-error -std=gnu++14 -I/usr/local/include" \
+            LDFLAGS="-L/usr/local/lib" \
+            ./configure --prefix=/usr/local --target=arm-apple-darwin11 --disable-lto-support
           make -j$(nproc)
           make install
 
