@@ -1,4 +1,5 @@
 #import "DocxHelper.h"
+#import <ImageIO/ImageIO.h>
 #import <zlib.h>
 
 static void zero_mem(void *ptr, size_t len) {
@@ -48,6 +49,7 @@ static void zero_mem(void *ptr, size_t len) {
 @property (nonatomic, strong) NSDictionary<NSString *, NSString *> *imageRels;
 @property (nonatomic, strong) NSMutableAttributedString *result;
 @property (nonatomic, strong) NSMutableString *currentText;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, UIFont *> *fontCache;
 @property (nonatomic, assign) BOOL inParagraph;
 @property (nonatomic, assign) BOOL inRun;
 @property (nonatomic, assign) BOOL inText;
@@ -68,6 +70,7 @@ static void zero_mem(void *ptr, size_t len) {
     if (self) {
         _result = [[NSMutableAttributedString alloc] init];
         _currentText = [[NSMutableString alloc] init];
+        _fontCache = [NSMutableDictionary dictionary];
         _fontSize = 18.0;
         _alignment = NSTextAlignmentRight;
         _isRTL = YES;
@@ -76,18 +79,23 @@ static void zero_mem(void *ptr, size_t len) {
     return self;
 }
 
-- (UIImage *)downsampledImage:(UIImage *)image maxDimension:(CGFloat)maxDim {
-    if (!image) return nil;
-    CGFloat w = image.size.width;
-    CGFloat h = image.size.height;
-    if (w <= maxDim && h <= maxDim) return image;
-    CGFloat scale = maxDim / MAX(w, h);
-    CGSize newSize = CGSizeMake((CGFloat)(NSInteger)(w * scale + 0.5), (CGFloat)(NSInteger)(h * scale + 0.5));
-    UIGraphicsBeginImageContextWithOptions(newSize, NO, 1.0);
-    [image drawInRect:CGRectMake(0, 0, newSize.width, newSize.height)];
-    UIImage *resized = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return resized ?: image;
+- (UIImage *)fastDownsampledImageFromData:(NSData *)data maxDimension:(CGFloat)maxDim {
+    if (!data || data.length == 0) return nil;
+    CGImageSourceRef src = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+    if (!src) return [UIImage imageWithData:data];
+
+    NSDictionary *opts = @{
+        (__bridge NSString *)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
+        (__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize: @((NSInteger)maxDim),
+        (__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform: @YES
+    };
+    CGImageRef cgImg = CGImageSourceCreateThumbnailAtIndex(src, 0, (__bridge CFDictionaryRef)opts);
+    CFRelease(src);
+
+    if (!cgImg) return [UIImage imageWithData:data];
+    UIImage *img = [UIImage imageWithCGImage:cgImg];
+    CGImageRelease(cgImg);
+    return img;
 }
 
 - (UIFont *)currentFont {
@@ -99,10 +107,15 @@ static void zero_mem(void *ptr, size_t len) {
     } else if (self.isItalic) {
         fontName = @"Arial-ItalicMT";
     }
+    NSString *key = [NSString stringWithFormat:@"%@_%ld", fontName, (long)(self.fontSize * 10.0)];
+    UIFont *cached = self.fontCache[key];
+    if (cached) return cached;
+
     UIFont *font = [UIFont fontWithName:fontName size:self.fontSize];
     if (!font) {
         font = self.isBold ? [UIFont boldSystemFontOfSize:self.fontSize] : [UIFont systemFontOfSize:self.fontSize];
     }
+    if (font) self.fontCache[key] = font;
     return font;
 }
 
@@ -136,13 +149,12 @@ static void zero_mem(void *ptr, size_t len) {
     NSData *imgData = self.zipEntries[mediaPath];
     if (!imgData) return;
 
-    UIImage *rawImg = [UIImage imageWithData:imgData];
-    UIImage *img = [self downsampledImage:rawImg maxDimension:1024.0];
+    UIImage *img = [self fastDownsampledImageFromData:imgData maxDimension:768.0];
     if (!img) return;
 
     [self flushRunText];
 
-    CGFloat maxDisplayWidth = 480.0;
+    CGFloat maxDisplayWidth = 460.0;
     CGFloat targetW = img.size.width;
     CGFloat targetH = img.size.height;
 
@@ -349,7 +361,7 @@ static void zero_mem(void *ptr, size_t len) {
 }
 
 + (NSAttributedString *)attributedStringFromDocxURL:(NSURL *)url error:(NSError **)error {
-    NSData *zipData = [NSData dataWithContentsOfURL:url options:0 error:error];
+    NSData *zipData = [NSData dataWithContentsOfURL:url options:NSDataReadingMappedIfSafe error:error];
     if (!zipData) return nil;
 
     NSDictionary<NSString *, NSData *> *entries = [self extractZipEntriesFromData:zipData];
@@ -398,7 +410,7 @@ static void zero_mem(void *ptr, size_t len) {
     if (rawData.length == 0) return [NSData data];
     z_stream strm;
     zero_mem(&strm, sizeof(strm));
-    if (deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+    if (deflateInit2(&strm, Z_BEST_SPEED, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
         return nil;
     }
     NSMutableData *compressed = [NSMutableData dataWithLength:deflateBound(&strm, (uLong)rawData.length)];
@@ -461,14 +473,14 @@ static void zero_mem(void *ptr, size_t len) {
                 NSTextAttachment *attachment = attrs[NSAttachmentAttributeName];
                 if (attachment && attachment.image) {
                     UIImage *img = attachment.image;
-                    NSData *jpegData = UIImageJPEGRepresentation(img, 0.85);
+                    NSData *jpegData = UIImageJPEGRepresentation(img, 0.78);
                     if (jpegData) {
                         imageCounter++;
                         NSString *rId = [NSString stringWithFormat:@"rId%ld", (long)imageCounter];
                         NSString *fileName = [NSString stringWithFormat:@"image%ld.jpg", (long)imageCounter];
                         NSString *zipPath = [NSString stringWithFormat:@"word/media/%@", fileName];
 
-                        [mediaEntries addObject:@{@"name": zipPath, @"data": jpegData}];
+                        [mediaEntries addObject:@{@"name": zipPath, @"data": jpegData, @"store": @YES}];
                         [docRelsXML appendFormat:@"  <Relationship Id=\"%@\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/%@\"/>\n", rId, fileName];
 
                         CGFloat dispW = (attachment.bounds.size.width > 0) ? attachment.bounds.size.width : MIN(450.0, img.size.width);
@@ -559,9 +571,9 @@ static void zero_mem(void *ptr, size_t len) {
     for (NSDictionary *entry in entries) {
         NSData *nameData = [entry[@"name"] dataUsingEncoding:NSUTF8StringEncoding];
         NSData *rawData = entry[@"data"];
-        NSData *compData = [self deflateRaw:rawData];
-        if (!compData) compData = rawData;
-        uint16_t method = (compData != rawData) ? 8 : 0;
+        BOOL storeOnly = [entry[@"store"] boolValue];
+        NSData *compData = storeOnly ? rawData : ([self deflateRaw:rawData] ?: rawData);
+        uint16_t method = (!storeOnly && compData != rawData) ? 8 : 0;
 
         uLong crc = crc32(0L, Z_NULL, 0);
         crc = crc32(crc, (const Bytef *)rawData.bytes, (uInt)rawData.length);
