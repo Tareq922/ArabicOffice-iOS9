@@ -45,7 +45,7 @@ jobs:
               SKIP_NEXT=1
               continue
             fi
-            if [[ "$arg" == --target=* ]] || [ "$arg" = "-m64" ] || [ "$arg" = "-m32" ] || [[ "$arg" == -march=* ]] || [[ "$arg" == -mcpu=* ]] || [[ "$arg" == -mtune=* ]]; then
+            if [[ "$arg" == --target=* ]] || [ "$arg" = "-m64" ] || [ "$arg" = "-m32" ] || [[ "$arg" == -march=* ]] || [[ "$arg" == -mcpu=* ]] || [[ "$arg" == -mtune=* ]] || [ "$arg" = "-fmodules" ] || [ "$arg" = "-fcxx-modules" ] || [ "$arg" = "-fimplicit-module-maps" ] || [[ "$arg" == -fmodules-cache-path=* ]]; then
               continue
             fi
             if [ "$arg" = "-c" ] || [ "$arg" = "-S" ] || [ "$arg" = "-E" ]; then
@@ -60,7 +60,7 @@ jobs:
           if [ $IS_COMPILE_ONLY -eq 0 ]; then
             ARGS+=("--ld-path=$BIN_DIR/ld")
           fi
-          exec /usr/bin/clang "${ARGS[@]}" --target=armv7-apple-ios9.0
+          exec /usr/bin/clang "${ARGS[@]}" -fno-modules --target=armv7-apple-ios9.0
           EOF
           chmod +x "$BIN_DIR/clang"
           cp "$BIN_DIR/clang" "$BIN_DIR/arm-apple-darwin11-clang"
@@ -80,7 +80,7 @@ jobs:
               SKIP_NEXT=1
               continue
             fi
-            if [[ "$arg" == --target=* ]] || [ "$arg" = "-m64" ] || [ "$arg" = "-m32" ] || [[ "$arg" == -march=* ]] || [[ "$arg" == -mcpu=* ]] || [[ "$arg" == -mtune=* ]]; then
+            if [[ "$arg" == --target=* ]] || [ "$arg" = "-m64" ] || [ "$arg" = "-m32" ] || [[ "$arg" == -march=* ]] || [[ "$arg" == -mcpu=* ]] || [[ "$arg" == -mtune=* ]] || [ "$arg" = "-fmodules" ] || [ "$arg" = "-fcxx-modules" ] || [ "$arg" = "-fimplicit-module-maps" ] || [[ "$arg" == -fmodules-cache-path=* ]]; then
               continue
             fi
             if [ "$arg" = "-c" ] || [ "$arg" = "-S" ] || [ "$arg" = "-E" ]; then
@@ -95,7 +95,7 @@ jobs:
           if [ $IS_COMPILE_ONLY -eq 0 ]; then
             ARGS+=("--ld-path=$BIN_DIR/ld")
           fi
-          exec /usr/bin/clang++ "${ARGS[@]}" --target=armv7-apple-ios9.0
+          exec /usr/bin/clang++ "${ARGS[@]}" -fno-modules --target=armv7-apple-ios9.0
           EOF
           chmod +x "$BIN_DIR/clang++"
           cp "$BIN_DIR/clang++" "$BIN_DIR/arm-apple-darwin11-clang++"
@@ -147,6 +147,7 @@ jobs:
         run: |
           export THEOS=$HOME/theos
           export PATH="$HOME/theos/toolchain/linux/iphone/bin:$PATH"
+          find . -maxdepth 2 -name "*.m" -exec sed -i 's/@import \([A-Za-z0-9_]*\);/#import <\1\/\1.h>/g' {} +
           make stage DEBUG=0 \
             TARGET_CC="$HOME/theos/toolchain/linux/iphone/bin/clang" \
             TARGET_CXX="$HOME/theos/toolchain/linux/iphone/bin/clang++" \
