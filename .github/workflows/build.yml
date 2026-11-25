@@ -24,7 +24,7 @@ jobs:
             /usr/local/lib
             /usr/local/include
             /usr/local/share
-          key: ios9-armv7-theos-toolchain-v3
+          key: ios9-armv7-theos-toolchain-v4
 
       - name: Install build dependencies
         run: |
@@ -34,10 +34,9 @@ jobs:
             build-essential clang llvm lld cmake ninja-build pkg-config \
             git curl ca-certificates unzip zip python3 \
             libxml2-dev libssl-dev zlib1g-dev uuid-dev \
-            libbz2-dev liblzma-dev libblocksruntime-dev libdispatch-dev libplist-dev \
-            fakeroot dpkg
+            libbz2-dev liblzma-dev libplist-dev fakeroot dpkg
 
-      - name: Build ldid, libdispatch, libtapi, and cctools (armv7)
+      - name: Build ldid, libtapi, and cctools (armv7)
         if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
           set -e
@@ -45,28 +44,17 @@ jobs:
           cd /tmp/toolchain-build
 
           git clone --depth 1 https://github.com/tpoechtrager/ldid.git
-          make -C ldid INSTALLPREFIX=/usr/local -j$(nproc) install
-
-          if ! ldconfig -p | grep -q libdispatch; then
-            git clone --depth 1 https://github.com/tpoechtrager/apple-libdispatch.git
-            mkdir -p apple-libdispatch/build
-            cmake -S apple-libdispatch -B apple-libdispatch/build \
-              -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-              -DCMAKE_INSTALL_PREFIX=/usr/local
-            cmake --build apple-libdispatch/build -j$(nproc)
-            cmake --install apple-libdispatch/build
-            ldconfig /usr/local/lib
-          fi
+          make -C ldid CXX=g++ INSTALLPREFIX=/usr/local -j$(nproc) install
 
           git clone --depth 1 https://github.com/tpoechtrager/apple-libtapi.git
           cd apple-libtapi
-          INSTALLPREFIX=/usr/local ./build.sh
+          CC=gcc CXX=g++ INSTALLPREFIX=/usr/local ./build.sh
           ./install.sh
           cd /tmp/toolchain-build
 
           git clone --depth 1 https://github.com/tpoechtrager/cctools-port.git
           cd cctools-port/cctools
-          ./configure --prefix=/usr/local --target=arm-apple-darwin11 --with-libtapi=/usr/local
+          CC=gcc CXX=g++ ./configure --prefix=/usr/local --target=arm-apple-darwin11 --with-libtapi=/usr/local
           make -j$(nproc)
           make install
 
