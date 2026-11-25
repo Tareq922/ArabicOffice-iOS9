@@ -24,19 +24,20 @@ jobs:
             /usr/local/lib
             /usr/local/include
             /usr/local/share
-          key: ios9-armv7-theos-toolchain-v1
+          key: ios9-armv7-theos-toolchain-v2
 
       - name: Install build dependencies
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential clang llvm lld cmake ninja-build \
+            build-essential clang llvm lld cmake ninja-build pkg-config \
             git curl ca-certificates unzip zip python3 \
             libxml2-dev libssl-dev zlib1g-dev uuid-dev \
-            libbz2-dev liblzma-dev fakeroot dpkg
+            libbz2-dev liblzma-dev libblocksruntime-dev libplist-dev \
+            fakeroot dpkg
 
-      - name: Build ldid, xar, libtapi, and cctools (armv7)
+      - name: Build ldid, libtapi, and cctools (armv7)
         if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
           set -e
