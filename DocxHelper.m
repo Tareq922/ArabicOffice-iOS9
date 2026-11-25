@@ -50,6 +50,9 @@ static void zero_mem(void *ptr, size_t len) {
 @property (nonatomic, strong) NSMutableAttributedString *result;
 @property (nonatomic, strong) NSMutableString *currentText;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, UIFont *> *fontCache;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSParagraphStyle *> *paraStyleCache;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *attrCache;
+@property (nonatomic, strong) NSDictionary *lastFlushedAttributes;
 @property (nonatomic, assign) BOOL inParagraph;
 @property (nonatomic, assign) BOOL inRun;
 @property (nonatomic, assign) BOOL inText;
@@ -59,6 +62,7 @@ static void zero_mem(void *ptr, size_t len) {
 @property (nonatomic, assign) CGFloat fontSize;
 @property (nonatomic, copy) NSString *requestedFontFamily;
 @property (nonatomic, strong) UIColor *textColor;
+@property (nonatomic, copy) NSString *textColorKey;
 @property (nonatomic, assign) NSTextAlignment alignment;
 @property (nonatomic, assign) BOOL isRTL;
 @property (nonatomic, assign) BOOL hasAppendedFirstParagraph;
@@ -77,10 +81,13 @@ static void zero_mem(void *ptr, size_t len) {
     self = [super init];
     if (self) {
         _result = [[NSMutableAttributedString alloc] init];
-        _currentText = [[NSMutableString alloc] init];
+        _currentText = [[NSMutableString alloc] initWithCapacity:256];
         _fontCache = [NSMutableDictionary dictionary];
+        _paraStyleCache = [NSMutableDictionary dictionary];
+        _attrCache = [NSMutableDictionary dictionary];
         _fontSize = 18.0;
         _textColor = [UIColor blackColor];
+        _textColorKey = @"000000";
         _alignment = NSTextAlignmentRight;
         _isRTL = YES;
         _currentDrawingSize = CGSizeZero;
@@ -96,7 +103,8 @@ static void zero_mem(void *ptr, size_t len) {
     NSDictionary *opts = @{
         (__bridge NSString *)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
         (__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize: @((NSInteger)maxDim),
-        (__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform: @YES
+        (__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform: @YES,
+        (__bridge NSString *)kCGImageSourceShouldCacheImmediately: @YES
     };
     CGImageRef cgImg = CGImageSourceCreateThumbnailAtIndex(src, 0, (__bridge CFDictionaryRef)opts);
     CFRelease(src);
@@ -108,7 +116,9 @@ static void zero_mem(void *ptr, size_t len) {
 }
 
 - (UIColor *)colorFromHexString:(NSString *)hex {
-    if (!hex || hex.length != 6 || [hex isEqualToString:@"auto"]) return [UIColor blackColor];
+    if (!hex || hex.length != 6 || [hex isEqualToString:@"000000"] || [hex isEqualToString:@"auto"]) {
+        return [UIColor blackColor];
+    }
     unsigned int rgb = 0;
     NSScanner *scanner = [NSScanner scannerWithString:hex];
     if (![scanner scanHexInt:&rgb]) return [UIColor blackColor];
@@ -118,7 +128,7 @@ static void zero_mem(void *ptr, size_t len) {
     return [UIColor colorWithRed:r green:g blue:b alpha:1.0];
 }
 
-- (UIFont *)currentFont {
+- (NSString *)resolvedFontName {
     BOOL effectiveBold = self.isBold || (self.inTableRow && self.tableRowIndex == 0);
     NSString *baseFamily = @"Arial";
     if (self.requestedFontFamily.length > 0) {
@@ -128,57 +138,97 @@ static void zero_mem(void *ptr, size_t len) {
         else if ([low rangeOfString:@"baghdad"].location != NSNotFound) baseFamily = @"Baghdad";
     }
 
-    NSString *fontName = @"ArialMT";
     if ([baseFamily isEqualToString:@"GeezaPro"]) {
-        fontName = effectiveBold ? @"GeezaPro-Bold" : @"GeezaPro";
+        return effectiveBold ? @"GeezaPro-Bold" : @"GeezaPro";
     } else if ([baseFamily isEqualToString:@"Damascus"]) {
-        fontName = effectiveBold ? @"DamascusBold" : @"Damascus";
+        return effectiveBold ? @"DamascusBold" : @"Damascus";
     } else if ([baseFamily isEqualToString:@"Baghdad"]) {
-        fontName = @"Baghdad";
+        return @"Baghdad";
     } else {
-        if (effectiveBold && self.isItalic) fontName = @"Arial-BoldItalicMT";
-        else if (effectiveBold) fontName = @"Arial-BoldMT";
-        else if (self.isItalic) fontName = @"Arial-ItalicMT";
+        if (effectiveBold && self.isItalic) return @"Arial-BoldItalicMT";
+        if (effectiveBold) return @"Arial-BoldMT";
+        if (self.isItalic) return @"Arial-ItalicMT";
+        return @"ArialMT";
     }
+}
 
-    NSString *key = [NSString stringWithFormat:@"%@_%ld", fontName, (long)(self.fontSize * 10.0)];
+- (UIFont *)fontForResolvedName:(NSString *)fontName size:(CGFloat)size {
+    NSString *key = [NSString stringWithFormat:@"%@_%ld", fontName, (long)(size * 10.0)];
     UIFont *cached = self.fontCache[key];
     if (cached) return cached;
 
-    UIFont *font = [UIFont fontWithName:fontName size:self.fontSize];
+    UIFont *font = [UIFont fontWithName:fontName size:size];
     if (!font) {
-        font = effectiveBold ? [UIFont boldSystemFontOfSize:self.fontSize] : [UIFont systemFontOfSize:self.fontSize];
+        BOOL isB = ([fontName rangeOfString:@"Bold"].location != NSNotFound);
+        font = isB ? [UIFont boldSystemFontOfSize:size] : [UIFont systemFontOfSize:size];
     }
     if (font) self.fontCache[key] = font;
     return font;
 }
 
-- (NSDictionary *)currentAttributes {
+- (NSParagraphStyle *)cachedParagraphStyle {
+    NSString *pKey = [NSString stringWithFormat:@"%ld_%d_%d", (long)self.alignment, self.isRTL, self.inTableRow];
+    NSParagraphStyle *cached = self.paraStyleCache[pKey];
+    if (cached) return cached;
+
     NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
     para.alignment = self.alignment;
     para.baseWritingDirection = self.isRTL ? NSWritingDirectionRightToLeft : NSWritingDirectionLeftToRight;
     if (self.inTableRow) {
         para.lineSpacing = 4.0;
     }
+    NSParagraphStyle *immutable = [para copy];
+    self.paraStyleCache[pKey] = immutable;
+    return immutable;
+}
 
-    NSMutableDictionary *attrs = [NSMutableDictionary dictionary];
-    attrs[NSFontAttributeName] = [self currentFont];
-    attrs[NSParagraphStyleAttributeName] = para;
+- (NSDictionary *)currentAttributes {
+    NSString *fontName = [self resolvedFontName];
+    BOOL isHeaderRow = (self.inTableRow && self.tableRowIndex == 0);
+    NSString *attrKey = [NSString stringWithFormat:@"%@_%ld_%@_%d_%d_%ld_%d",
+                         fontName,
+                         (long)(self.fontSize * 10.0),
+                         self.textColorKey ?: @"000000",
+                         self.isUnderline,
+                         isHeaderRow,
+                         (long)self.alignment,
+                         self.isRTL];
+
+    NSDictionary *cached = self.attrCache[attrKey];
+    if (cached) return cached;
+
+    NSMutableDictionary *attrs = [NSMutableDictionary dictionaryWithCapacity:5];
+    attrs[NSFontAttributeName] = [self fontForResolvedName:fontName size:self.fontSize];
+    attrs[NSParagraphStyleAttributeName] = [self cachedParagraphStyle];
     attrs[NSForegroundColorAttributeName] = self.textColor ?: [UIColor blackColor];
-    if (self.inTableRow && self.tableRowIndex == 0) {
+    if (isHeaderRow) {
         attrs[NSBackgroundColorAttributeName] = [UIColor colorWithRed:0.91 green:0.94 blue:0.98 alpha:1.0];
     }
     if (self.isUnderline) {
         attrs[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
     }
-    return attrs;
+
+    NSDictionary *immutable = [attrs copy];
+    self.attrCache[attrKey] = immutable;
+    return immutable;
+}
+
+- (void)appendText:(NSString *)str withAttributes:(NSDictionary *)attrs {
+    if (str.length == 0) return;
+    if (self.lastFlushedAttributes && self.lastFlushedAttributes == attrs && self.result.length > 0) {
+        [self.result replaceCharactersInRange:NSMakeRange(self.result.length, 0) withString:str];
+    } else {
+        NSAttributedString *chunk = [[NSAttributedString alloc] initWithString:str attributes:attrs];
+        [self.result appendAttributedString:chunk];
+        self.lastFlushedAttributes = attrs;
+    }
 }
 
 - (void)flushRunText {
     if (self.currentText.length > 0) {
-        NSAttributedString *chunk = [[NSAttributedString alloc] initWithString:[self.currentText copy] attributes:[self currentAttributes]];
-        [self.result appendAttributedString:chunk];
+        NSString *chunk = [self.currentText copy];
         [self.currentText setString:@""];
+        [self appendText:chunk withAttributes:[self currentAttributes]];
     }
 }
 
@@ -189,7 +239,7 @@ static void zero_mem(void *ptr, size_t len) {
     NSData *imgData = self.zipEntries[mediaPath];
     if (!imgData) return;
 
-    UIImage *img = [self fastDownsampledImageFromData:imgData maxDimension:768.0];
+    UIImage *img = [self fastDownsampledImageFromData:imgData maxDimension:640.0];
     if (!img) return;
 
     [self flushRunText];
@@ -215,6 +265,7 @@ static void zero_mem(void *ptr, size_t len) {
     NSMutableAttributedString *imgAttr = [[NSAttributedString attributedStringWithAttachment:attachment] mutableCopy];
     [imgAttr addAttributes:[self currentAttributes] range:NSMakeRange(0, imgAttr.length)];
     [self.result appendAttributedString:imgAttr];
+    self.lastFlushedAttributes = nil;
 }
 
 - (void)parser:(NSXMLParser *)parser didStartElement:(NSString *)elementName namespaceURI:(NSString *)namespaceURI qualifiedName:(NSString *)qName attributes:(NSDictionary<NSString *,NSString *> *)attributeDict {
@@ -222,8 +273,7 @@ static void zero_mem(void *ptr, size_t len) {
         self.inTable = YES;
         self.tableRowIndex = 0;
         if (self.hasAppendedFirstParagraph) {
-            NSAttributedString *nl = [[NSAttributedString alloc] initWithString:@"\n" attributes:[self currentAttributes]];
-            [self.result appendAttributedString:nl];
+            [self appendText:@"\n" withAttributes:[self currentAttributes]];
         }
         self.hasAppendedFirstParagraph = YES;
     } else if ([elementName isEqualToString:@"w:tr"] && self.inTable) {
@@ -237,21 +287,19 @@ static void zero_mem(void *ptr, size_t len) {
         if (!self.isFirstCellInRow) {
             NSMutableDictionary *sepAttrs = [[self currentAttributes] mutableCopy];
             sepAttrs[NSForegroundColorAttributeName] = [UIColor colorWithRed:0.25 green:0.45 blue:0.75 alpha:1.0];
-            NSAttributedString *sep = [[NSAttributedString alloc] initWithString:@" │ " attributes:sepAttrs];
-            [self.result appendAttributedString:sep];
+            [self appendText:@" │ " withAttributes:sepAttrs];
+            self.lastFlushedAttributes = nil;
         }
         self.isFirstCellInRow = NO;
     } else if ([elementName isEqualToString:@"w:p"]) {
         if (self.inTableCell) {
             if (!self.isFirstParagraphInCell) {
-                NSAttributedString *sp = [[NSAttributedString alloc] initWithString:@" " attributes:[self currentAttributes]];
-                [self.result appendAttributedString:sp];
+                [self appendText:@" " withAttributes:[self currentAttributes]];
             }
             self.isFirstParagraphInCell = NO;
         } else {
             if (self.hasAppendedFirstParagraph) {
-                NSAttributedString *nl = [[NSAttributedString alloc] initWithString:@"\n" attributes:[self currentAttributes]];
-                [self.result appendAttributedString:nl];
+                [self appendText:@"\n" withAttributes:[self currentAttributes]];
             }
             self.hasAppendedFirstParagraph = YES;
             self.alignment = NSTextAlignmentRight;
@@ -280,10 +328,13 @@ static void zero_mem(void *ptr, size_t len) {
         self.fontSize = 18.0;
         self.requestedFontFamily = nil;
         self.textColor = [UIColor blackColor];
+        self.textColorKey = @"000000";
     } else if ([elementName isEqualToString:@"w:rFonts"] && self.inRun) {
         self.requestedFontFamily = attributeDict[@"w:cs"] ?: attributeDict[@"w:ascii"] ?: attributeDict[@"w:hAnsi"];
     } else if ([elementName isEqualToString:@"w:color"] && self.inRun) {
-        self.textColor = [self colorFromHexString:attributeDict[@"w:val"]];
+        NSString *val = attributeDict[@"w:val"];
+        self.textColorKey = (val.length == 6 && ![val isEqualToString:@"auto"]) ? val : @"000000";
+        self.textColor = [self colorFromHexString:self.textColorKey];
     } else if ([elementName isEqualToString:@"w:b"] && self.inRun) {
         NSString *val = attributeDict[@"w:val"];
         self.isBold = !(val && ([val isEqualToString:@"0"] || [val isEqualToString:@"false"]));
@@ -343,8 +394,7 @@ static void zero_mem(void *ptr, size_t len) {
         self.inTableCell = NO;
     } else if ([elementName isEqualToString:@"w:tr"]) {
         [self flushRunText];
-        NSAttributedString *nl = [[NSAttributedString alloc] initWithString:@"\n" attributes:[self currentAttributes]];
-        [self.result appendAttributedString:nl];
+        [self appendText:@"\n" withAttributes:[self currentAttributes]];
         self.tableRowIndex++;
         self.inTableRow = NO;
     } else if ([elementName isEqualToString:@"w:tbl"]) {
@@ -496,7 +546,7 @@ static void zero_mem(void *ptr, size_t len) {
 }
 
 + (NSString *)hexStringFromColor:(UIColor *)color {
-    if (!color) return nil;
+    if (!color || color == [UIColor blackColor]) return nil;
     CGFloat r = 0, g = 0, b = 0, a = 0;
     if ([color getRed:&r green:&g blue:&b alpha:&a]) {
         NSInteger ri = (NSInteger)(r * 255.0 + 0.5);
@@ -530,7 +580,6 @@ static void zero_mem(void *ptr, size_t len) {
                 while ([sub hasSuffix:@" "]) sub = [sub substringToIndex:sub.length - 1];
             }
         }
-        
         if (sub.length == 0) return;
 
         UIFont *font = attrs[NSFontAttributeName];
@@ -675,7 +724,8 @@ static void zero_mem(void *ptr, size_t len) {
 }
 
 + (BOOL)writeAttributedString:(NSAttributedString *)attrStr toDocxURL:(NSURL *)url error:(NSError **)error {
-    NSMutableString *xml = [NSMutableString string];
+    NSString *fullText = attrStr.string ?: @"";
+    NSMutableString *xml = [NSMutableString stringWithCapacity:MAX(4096, fullText.length * 6)];
     [xml appendString:@"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"];
     [xml appendString:@"<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" "
                       @"xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" "
@@ -690,7 +740,6 @@ static void zero_mem(void *ptr, size_t len) {
 
     __block NSInteger imageCounter = 0;
 
-    NSString *fullText = attrStr.string ?: @"";
     NSArray<NSString *> *lines = [fullText componentsSeparatedByString:@"\n"];
     NSUInteger location = 0;
     NSMutableArray<NSValue *> *pendingTableRows = [NSMutableArray array];
