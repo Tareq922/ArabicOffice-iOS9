@@ -13,6 +13,7 @@
 @property (nonatomic, strong) UIView *loadingOverlay;
 @property (nonatomic, strong) UILabel *loadingLabel;
 @property (nonatomic, copy) NSString *activeFontFamily;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, UIFont *> *fontCache;
 - (void)openDocumentAtURL:(NSURL *)url;
 @end
 
@@ -23,6 +24,7 @@
     self.view.backgroundColor = [UIColor whiteColor];
     self.title = @"مستند_جديد.docx";
     self.activeFontFamily = @"Arial";
+    self.fontCache = [NSMutableDictionary dictionary];
 
     UIBarButtonItem *newItem = [[UIBarButtonItem alloc] initWithTitle:@"جديد" style:UIBarButtonItemStylePlain target:self action:@selector(newDoc)];
     self.openItem = [[UIBarButtonItem alloc] initWithTitle:@"فتح" style:UIBarButtonItemStylePlain target:self action:@selector(openDocList)];
@@ -277,7 +279,6 @@
         return;
     }
 
-    // تحديد بداية ونهاية كتلة الجدول المتصلة
     NSUInteger blockStart = curLine.location;
     while (blockStart > 0) {
         NSRange prevPara = [full paragraphRangeForRange:NSMakeRange(blockStart - 1, 0)];
@@ -368,10 +369,16 @@
         else if (isB) name = @"Arial-BoldMT";
         else if (isI) name = @"Arial-ItalicMT";
     }
+
+    NSString *key = [NSString stringWithFormat:@"%@_%ld", name, (long)(size * 10.0)];
+    UIFont *cached = self.fontCache[key];
+    if (cached) return cached;
+
     UIFont *f = [UIFont fontWithName:name size:size];
     if (!f) {
         f = isB ? [UIFont boldSystemFontOfSize:size] : [UIFont systemFontOfSize:size];
     }
+    if (f) self.fontCache[key] = f;
     return f;
 }
 
@@ -583,48 +590,55 @@
     [picker dismissViewControllerAnimated:YES completion:^{
         if (!picked) return;
 
-        CGFloat maxDim = 768.0;
-        UIImage *finalImg = picked;
-        if (picked.size.width > maxDim || picked.size.height > maxDim) {
-            CGFloat scale = maxDim / MAX(picked.size.width, picked.size.height);
-            CGSize newSize = CGSizeMake((CGFloat)(NSInteger)(picked.size.width * scale + 0.5), (CGFloat)(NSInteger)(picked.size.height * scale + 0.5));
-            UIGraphicsBeginImageContextWithOptions(newSize, YES, 1.0);
-            [picked drawInRect:CGRectMake(0, 0, newSize.width, newSize.height)];
-            UIImage *resized = UIGraphicsGetImageFromCurrentImageContext();
-            UIGraphicsEndImageContext();
-            if (resized) finalImg = resized;
-        }
+        [self setLoading:YES message:@"جاري تجهيز الصورة..."];
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            CGFloat maxDim = 640.0;
+            UIImage *finalImg = picked;
+            if (picked.size.width > maxDim || picked.size.height > maxDim) {
+                CGFloat scale = maxDim / MAX(picked.size.width, picked.size.height);
+                CGSize newSize = CGSizeMake((CGFloat)(NSInteger)(picked.size.width * scale + 0.5), (CGFloat)(NSInteger)(picked.size.height * scale + 0.5));
+                UIGraphicsBeginImageContextWithOptions(newSize, YES, 1.0);
+                [picked drawInRect:CGRectMake(0, 0, newSize.width, newSize.height)];
+                UIImage *resized = UIGraphicsGetImageFromCurrentImageContext();
+                UIGraphicsEndImageContext();
+                if (resized) finalImg = resized;
+            }
 
-        CGFloat maxDisplayW = 460.0;
-        CGFloat dispW = finalImg.size.width;
-        CGFloat dispH = finalImg.size.height;
-        if (dispW > maxDisplayW && dispW > 0) {
-            CGFloat ratio = maxDisplayW / dispW;
-            dispW = maxDisplayW;
-            dispH = (CGFloat)(NSInteger)(dispH * ratio + 0.5);
-        }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self setLoading:NO message:nil];
+                CGFloat maxDisplayW = 460.0;
+                CGFloat dispW = finalImg.size.width;
+                CGFloat dispH = finalImg.size.height;
+                if (dispW > maxDisplayW && dispW > 0) {
+                    CGFloat ratio = maxDisplayW / dispW;
+                    dispW = maxDisplayW;
+                    dispH = (CGFloat)(NSInteger)(dispH * ratio + 0.5);
+                }
 
-        NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
-        attachment.image = finalImg;
-        attachment.bounds = CGRectMake(0, 0, dispW, dispH);
+                NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
+                attachment.image = finalImg;
+                attachment.bounds = CGRectMake(0, 0, dispW, dispH);
 
-        NSMutableAttributedString *imgStr = [[NSAttributedString attributedStringWithAttachment:attachment] mutableCopy];
-        [imgStr addAttributes:[self defaultArabicAttributes] range:NSMakeRange(0, imgStr.length)];
+                NSDictionary *defAttrs = [self defaultArabicAttributes];
+                NSMutableAttributedString *imgStr = [[NSAttributedString attributedStringWithAttachment:attachment] mutableCopy];
+                [imgStr addAttributes:defAttrs range:NSMakeRange(0, imgStr.length)];
 
-        NSMutableAttributedString *insertion = [[NSMutableAttributedString alloc] initWithString:@"\n" attributes:[self defaultArabicAttributes]];
-        [insertion appendAttributedString:imgStr];
-        [insertion appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n" attributes:[self defaultArabicAttributes]]];
+                NSMutableAttributedString *insertion = [[NSMutableAttributedString alloc] initWithString:@"\n" attributes:defAttrs];
+                [insertion appendAttributedString:imgStr];
+                [insertion appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n" attributes:defAttrs]];
 
-        NSTextStorage *storage = self.textView.textStorage;
-        NSRange sel = self.textView.selectedRange;
-        if (sel.location == NSNotFound || sel.location > storage.length) {
-            sel = NSMakeRange(storage.length, 0);
-        }
+                NSTextStorage *storage = self.textView.textStorage;
+                NSRange sel = self.textView.selectedRange;
+                if (sel.location == NSNotFound || sel.location > storage.length) {
+                    sel = NSMakeRange(storage.length, 0);
+                }
 
-        [storage beginEditing];
-        [storage replaceCharactersInRange:sel withAttributedString:insertion];
-        [storage endEditing];
-        self.textView.selectedRange = NSMakeRange(sel.location + insertion.length, 0);
+                [storage beginEditing];
+                [storage replaceCharactersInRange:sel withAttributedString:insertion];
+                [storage endEditing];
+                self.textView.selectedRange = NSMakeRange(sel.location + insertion.length, 0);
+            });
+        });
     }];
 }
 
@@ -654,11 +668,18 @@
     };
 }
 
+- (void)setAttributedTextFast:(NSAttributedString *)attrText {
+    [self.textView.undoManager disableUndoRegistration];
+    self.textView.attributedText = attrText;
+    [self.textView.undoManager enableUndoRegistration];
+    [self.textView.undoManager removeAllActions];
+}
+
 - (void)newDoc {
     self.currentFileURL = nil;
     self.title = @"مستند_جديد.docx";
     self.textView.typingAttributes = [self defaultArabicAttributes];
-    self.textView.attributedText = [[NSAttributedString alloc] initWithString:@"بسم الله الرحمن الرحيم\n" attributes:[self defaultArabicAttributes]];
+    [self setAttributedTextFast:[[NSAttributedString alloc] initWithString:@"بسم الله الرحمن الرحيم\n" attributes:[self defaultArabicAttributes]]];
 }
 
 - (void)applyRTL {
@@ -769,7 +790,7 @@
         if (name.length == 0) name = @"مستند_عربي";
         NSString *fullName = [NSString stringWithFormat:@"%@.%@", name, ext];
         NSURL *destURL = [[self documentsDirectoryURL] URLByAppendingPathComponent:fullName];
-        NSAttributedString *snapshot = [self.textView.attributedText copy];
+        NSAttributedString *snapshot = [[NSAttributedString alloc] initWithAttributedString:self.textView.attributedText];
         NSString *plainSnapshot = [self.textView.text copy];
 
         [self setLoading:YES message:@"جاري حفظ المستند..."];
@@ -847,7 +868,7 @@
         dispatch_async(dispatch_get_main_queue(), ^{
             [self setLoading:NO message:nil];
             if (loaded) {
-                self.textView.attributedText = loaded;
+                [self setAttributedTextFast:loaded];
                 self.currentFileURL = url;
                 self.title = url.lastPathComponent;
             } else {
