@@ -517,7 +517,6 @@ static void zero_mem(void *ptr, size_t len) {
     NSString *fullText = attrStr.string ?: @"";
     if (range.length == 0 || NSMaxRange(range) > fullText.length) return;
 
-    __block NSUInteger currentLoc = range.location;
     NSUInteger endLoc = NSMaxRange(range);
 
     [attrStr enumerateAttributesInRange:range options:0 usingBlock:^(NSDictionary<NSString *,id> *attrs, NSRange subRange, BOOL *stop) {
@@ -531,7 +530,7 @@ static void zero_mem(void *ptr, size_t len) {
                 while ([sub hasSuffix:@" "]) sub = [sub substringToIndex:sub.length - 1];
             }
         }
-        currentLoc = NSMaxRange(subRange);
+        
         if (sub.length == 0) return;
 
         UIFont *font = attrs[NSFontAttributeName];
