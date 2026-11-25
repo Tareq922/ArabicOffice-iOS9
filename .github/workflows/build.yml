@@ -24,17 +24,19 @@ jobs:
             /usr/local/lib
             /usr/local/include
             /usr/local/share
-          key: ios9-armv7-theos-toolchain-v4
+          key: ios9-armv7-theos-toolchain-v5
 
       - name: Install build dependencies
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential clang llvm lld cmake ninja-build pkg-config \
+            build-essential clang clang-12 llvm llvm-12-dev lld \
+            cmake ninja-build pkg-config \
             git curl ca-certificates unzip zip python3 \
             libxml2-dev libssl-dev zlib1g-dev uuid-dev \
-            libbz2-dev liblzma-dev libplist-dev fakeroot dpkg
+            libbz2-dev liblzma-dev libblocksruntime-dev libdispatch-dev libplist-dev \
+            fakeroot dpkg
 
       - name: Build ldid, libtapi, and cctools (armv7)
         if: steps.cache-theos.outputs.cache-hit != 'true'
@@ -44,17 +46,17 @@ jobs:
           cd /tmp/toolchain-build
 
           git clone --depth 1 https://github.com/tpoechtrager/ldid.git
-          make -C ldid CXX=g++ INSTALLPREFIX=/usr/local -j$(nproc) install
+          make -C ldid CXX=clang++-12 INSTALLPREFIX=/usr/local -j$(nproc) install
 
           git clone --depth 1 https://github.com/tpoechtrager/apple-libtapi.git
           cd apple-libtapi
-          CC=gcc CXX=g++ INSTALLPREFIX=/usr/local ./build.sh
+          CC=clang-12 CXX=clang++-12 INSTALLPREFIX=/usr/local ./build.sh
           ./install.sh
           cd /tmp/toolchain-build
 
           git clone --depth 1 https://github.com/tpoechtrager/cctools-port.git
           cd cctools-port/cctools
-          CC=gcc CXX=g++ ./configure --prefix=/usr/local --target=arm-apple-darwin11 --with-libtapi=/usr/local
+          CC=clang-12 CXX=clang++-12 ./configure --prefix=/usr/local --target=arm-apple-darwin11 --with-libtapi=/usr/local
           make -j$(nproc)
           make install
 
