@@ -24,7 +24,7 @@ jobs:
             /usr/local/lib
             /usr/local/include
             /usr/local/share
-          key: ios9-armv7-theos-toolchain-v11
+          key: ios9-armv7-theos-toolchain-v12
 
       - name: Install build dependencies
         run: |
@@ -57,36 +57,60 @@ jobs:
           git clone --depth 1 https://github.com/tpoechtrager/cctools-port.git
           cd cctools-port/cctools
           python3 - << 'EOF'
-          import os, glob
+          import glob, re
 
-          def patch_dispatch_apply(s):
-              tok = "dispatch_apply("
+          FUNCS = (
+              "dispatch_apply",
+              "dispatch_sync",
+              "dispatch_async",
+              "dispatch_barrier_sync",
+              "dispatch_barrier_async",
+              "dispatch_group_async",
+              "dispatch_once",
+          )
+          PATTERN = re.compile(r'\b(' + '|'.join(FUNCS) + r')\s*\(')
+
+          def patch_gcd(s):
               pos = 0
               while True:
-                  idx = s.find(tok, pos)
-                  if idx == -1:
+                  m = PATTERN.search(s, pos)
+                  if not m:
                       break
-                  if idx > 0 and (s[idx-1].isalnum() or s[idx-1] == '_'):
-                      pos = idx + len(tok)
-                      continue
-                  open_paren = idx + len(tok) - 1
+                  func = m.group(1)
+                  open_paren = m.end() - 1
                   p_depth = 0
                   b_depth = 0
                   in_str = None
+                  in_line_comment = False
+                  in_block_comment = False
                   i = open_paren
                   args = []
                   arg_start = open_paren + 1
                   end_paren = -1
+
                   while i < len(s):
                       c = s[i]
-                      if in_str:
+                      nxt = s[i + 1] if i + 1 < len(s) else ''
+                      if in_line_comment:
+                          if c == '\n':
+                              in_line_comment = False
+                      elif in_block_comment:
+                          if c == '*' and nxt == '/':
+                              in_block_comment = False
+                              i += 1
+                      elif in_str:
                           if c == '\\':
-                              i += 2
-                              continue
-                          if c == in_str:
+                              i += 1
+                          elif c == in_str:
                               in_str = None
                       else:
-                          if c in ('"', "'"):
+                          if c == '/' and nxt == '/':
+                              in_line_comment = True
+                              i += 1
+                          elif c == '/' and nxt == '*':
+                              in_block_comment = True
+                              i += 1
+                          elif c in ('"', "'"):
                               in_str = c
                           elif c == '(' and b_depth == 0:
                               p_depth += 1
@@ -104,22 +128,38 @@ jobs:
                               args.append(s[arg_start:i])
                               arg_start = i + 1
                       i += 1
-                  if end_paren != -1 and len(args) == 3 and args[2].lstrip().startswith('^'):
-                      a2 = args[2].lstrip()
-                      lead = args[2][:len(args[2]) - len(a2)]
-                      new_a2 = lead + '[&]' + a2[1:]
-                      rep = f"([&](size_t _da_n, auto&& _da_q, auto&& _da_fn) {{ (void)_da_q; for (size_t _da_i = 0; _da_i < _da_n; ++_da_i) _da_fn(_da_i); }})({args[0]}, {args[1]}, {new_a2})"
-                      s = s[:idx] + rep + s[end_paren+1:]
-                      pos = idx + len(rep)
+
+                  if end_paren != -1 and len(args) >= 2 and args[-1].lstrip().startswith('^'):
+                      args = [patch_gcd(a) for a in args]
+                      last = args[-1]
+                      stripped = last.lstrip()
+                      lead = last[:len(last) - len(stripped)]
+                      lam = lead + '[&]' + stripped[1:]
+
+                      if func == "dispatch_apply" and len(args) == 3:
+                          rep = f"([&](size_t _da_n, auto&& _da_q, auto&& _da_fn) {{ (void)_da_q; for (size_t _da_i = 0; _da_i < _da_n; ++_da_i) _da_fn(_da_i); }})({args[0]}, {args[1]}, {lam})"
+                      elif func in ("dispatch_sync", "dispatch_async", "dispatch_barrier_sync", "dispatch_barrier_async") and len(args) == 2:
+                          rep = f"([&](auto&& _ds_q, auto&& _ds_fn) {{ (void)_ds_q; _ds_fn(); }})({args[0]}, {lam})"
+                      elif func == "dispatch_group_async" and len(args) == 3:
+                          rep = f"([&](auto&& _dg_g, auto&& _dg_q, auto&& _dg_fn) {{ (void)_dg_g; (void)_dg_q; _dg_fn(); }})({args[0]}, {args[1]}, {lam})"
+                      elif func == "dispatch_once" and len(args) == 2:
+                          rep = f"([&](auto* _do_p, auto&& _do_fn) {{ if (!*_do_p) {{ *_do_p = 1; _do_fn(); }} }})({args[0]}, {lam})"
+                      else:
+                          pos = m.end()
+                          continue
+
+                      s = s[:m.start()] + rep + s[end_paren + 1:]
+                      pos = m.start() + len(rep)
                   else:
-                      pos = idx + len(tok)
+                      pos = m.end()
               return s
 
-          for path in glob.glob("ld64/**/*.cpp", recursive=True):
-              orig = open(path, encoding="utf-8", errors="ignore").read()
-              patched = patch_dispatch_apply(orig)
-              if patched != orig:
-                  open(path, "w", encoding="utf-8").write(patched)
+          for ext in ("*.cpp", "*.cc", "*.cxx", "*.mm", "*.hpp", "*.h"):
+              for path in glob.glob(f"ld64/**/{ext}", recursive=True):
+                  orig = open(path, encoding="utf-8", errors="ignore").read()
+                  patched = patch_gcd(orig)
+                  if patched != orig:
+                      open(path, "w", encoding="utf-8").write(patched)
           EOF
           CC=clang-12 CXX=clang++-12 ./configure --prefix=/usr/local --target=arm-apple-darwin11 --with-libtapi=/usr/local
           make -j$(nproc)
