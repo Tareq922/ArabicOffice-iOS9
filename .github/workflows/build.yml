@@ -24,7 +24,7 @@ jobs:
             /usr/local/lib
             /usr/local/include
             /usr/local/share
-          key: ios9-armv7-theos-toolchain-v8
+          key: ios9-armv7-theos-toolchain-v9
 
       - name: Install build dependencies
         run: |
@@ -66,7 +66,8 @@ jobs:
           j = s.index(end_tok, i) + len(end_tok)
           mid = re.sub(r"\bfit\b", "(*p_fit)", s[i:j])
           mid = re.sub(r"\bpos\b", "(*p_pos)", mid)
-          s = s[:i] + " __block auto *p_fit = &fit; __block auto *p_pos = &pos;" + mid + s[j:]
+          decl = " static thread_local ld::Fixup::iterator *p_fit; static thread_local std::unordered_map<const ld::Atom*, const ld::Atom*>::const_iterator *p_pos; p_fit = &fit; p_pos = &pos;"
+          s = s[:i] + decl + mid + s[j:]
           open(p, "w").write(s)
           '
           CC=clang-12 CXX=clang++-12 ./configure --prefix=/usr/local --target=arm-apple-darwin11 --with-libtapi=/usr/local
