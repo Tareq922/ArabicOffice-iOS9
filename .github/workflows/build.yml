@@ -24,7 +24,7 @@ jobs:
             /usr/local/lib
             /usr/local/include
             /usr/local/share
-          key: ios9-armv7-theos-toolchain-v5
+          key: ios9-armv7-theos-toolchain-v6
 
       - name: Install build dependencies
         run: |
@@ -56,6 +56,8 @@ jobs:
 
           git clone --depth 1 https://github.com/tpoechtrager/cctools-port.git
           cd cctools-port/cctools
+          sed -i 's/for (ld::Fixup::iterator fit/for (__block ld::Fixup::iterator fit/' ld64/src/ld/passes/code_dedup.cpp
+          sed -i 's/std::unordered_map<const ld::Atom\*, const ld::Atom\*>::const_iterator pos;/__block std::unordered_map<const ld::Atom*, const ld::Atom*>::const_iterator pos;/' ld64/src/ld/passes/code_dedup.cpp
           CC=clang-12 CXX=clang++-12 ./configure --prefix=/usr/local --target=arm-apple-darwin11 --with-libtapi=/usr/local
           make -j$(nproc)
           make install
