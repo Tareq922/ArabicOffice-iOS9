@@ -24,7 +24,7 @@ jobs:
             /usr/local/lib
             /usr/local/include
             /usr/local/share
-          key: ios9-armv7-theos-toolchain-v6
+          key: ios9-armv7-theos-toolchain-v7
 
       - name: Install build dependencies
         run: |
@@ -56,8 +56,19 @@ jobs:
 
           git clone --depth 1 https://github.com/tpoechtrager/cctools-port.git
           cd cctools-port/cctools
-          sed -i 's/for (ld::Fixup::iterator fit/for (__block ld::Fixup::iterator fit/' ld64/src/ld/passes/code_dedup.cpp
-          sed -i 's/std::unordered_map<const ld::Atom\*, const ld::Atom\*>::const_iterator pos;/__block std::unordered_map<const ld::Atom*, const ld::Atom*>::const_iterator pos;/' ld64/src/ld/passes/code_dedup.cpp
+          python3 -c '
+          import re
+          p = "ld64/src/ld/passes/code_dedup.cpp"
+          s = open(p).read()
+          start_tok = "std::unordered_map<const ld::Atom*, const ld::Atom*>::const_iterator pos;"
+          end_tok = "fit->u.target = pos->second;"
+          i = s.index(start_tok) + len(start_tok)
+          j = s.index(end_tok, i) + len(end_tok)
+          mid = re.sub(r"\bfit\b", "(*p_fit)", s[i:j])
+          mid = re.sub(r"\bpos\b", "(*p_pos)", mid)
+          s = s[:i] + " auto *p_fit = &fit; auto *p_pos = &pos;" + mid + s[j:]
+          open(p, "w").write(s)
+          '
           CC=clang-12 CXX=clang++-12 ./configure --prefix=/usr/local --target=arm-apple-darwin11 --with-libtapi=/usr/local
           make -j$(nproc)
           make install
